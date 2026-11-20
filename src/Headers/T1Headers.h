@@ -173,7 +173,8 @@
 - (id)_tweetsSubtitle;
 @end
 
-// Hooked so an explicit jump to the Videos tab beats the photos default
+// Hooked to open the Media tab on Photos: its tab bar data source calls, and
+// the explicit jump to a profile's Videos tab that must win over that default
 @interface T1ProfileViewController : UIViewController
 @property (retain, nonatomic) NSArray* displayContentProviders;
 - (void)showProfileVideosTabWithPersist:(BOOL)persist;

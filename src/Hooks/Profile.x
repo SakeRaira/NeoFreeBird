@@ -145,91 +145,141 @@ static void PresentCopyProfileInfoSheet(T1ProfileUserViewModel* viewModel) {
 // MARK: - Open the Media tab on Photos
 
 // The Media tab is a group of Videos and Photos inner tabs that opens on
-// Videos. Point the group at Photos once per active-index array: X builds a new
-// array when it rebuilds the groups, and a tap by the user only changes the
-// existing one in place, which is left alone after the first adjustment.
-static const void* PhotosFirstAppliedKey = &PhotosFirstAppliedKey;
-// Set on a profile's providers when X opens its Videos tab on purpose (the
-// immersive player's link to a profile's videos), which the default must not
-// undo.
-static const void* VideosRequestedKey = &VideosRequestedKey;
+// Videos. The profile's tab bar asks the profile for each tab's label, inner
+// tabs and page by outer tab index, and the provider's groupActiveIndices
+// decides which inner tab that is; the group is pointed at Photos from there,
+// before the Media tab's label or page exist, once per profile.
+//
+// The first version did this from inside -contentMainEntries, which X calls
+// throughout building the profile, including while it walks
+// groupActiveIndices, and changing the array under it crashed every profile.
+// So nothing here runs inside a provider getter, the array is replaced instead
+// of changed in place, and a re-entrant call does nothing.
+static const void* PhotosDefaultSettledKey = &PhotosDefaultSettledKey;
+static BOOL PreferringPhotos = NO;
 
-static void SelectPhotosInMediaGroup(T1ProfileDisplayNormalMainContentProvider* provider,
-                                     NSArray* entries) {
-    if (![BHTSettings boolForKey:@"profile_media_photos_first"] ||
-        objc_getAssociatedObject(provider, VideosRequestedKey) ||
-        ![entries isKindOfClass:NSArray.class] ||
+static T1ProfileDisplayNormalMainContentProvider* MainContentProvider(T1ProfileViewController* profile) {
+    NSArray* providers = [profile respondsToSelector:@selector(displayContentProviders)]
+                             ? profile.displayContentProviders
+                             : nil;
+    Class mainClass = objc_getClass("T1ProfileDisplayNormalMainContentProvider");
+    if (![providers isKindOfClass:NSArray.class] || !mainClass) {
+        return nil;
+    }
+
+    for (id provider in providers) {
+        if ([provider isKindOfClass:mainClass]) {
+            return provider;
+        }
+    }
+    return nil;
+}
+
+static BOOL EntryHasCachedViewController(id entry) {
+    SEL selector = @selector(hasCachedViewController);
+    return [entry respondsToSelector:selector] &&
+           ((BOOL (*)(id, SEL))objc_msgSend)(entry, selector);
+}
+
+static void SettlePhotosDefault(T1ProfileDisplayNormalMainContentProvider* provider) {
+    objc_setAssociatedObject(provider, PhotosDefaultSettledKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void PointMediaGroupAtPhotos(T1ProfileDisplayNormalMainContentProvider* provider,
+                                    long long tabIndex) {
+    NSArray* entries = provider.contentMainEntries;
+    id photoEntry = provider.photoEntry;
+    if (![entries isKindOfClass:NSArray.class] || !photoEntry || tabIndex < 0 ||
+        tabIndex >= (long long)entries.count) {
+        return;
+    }
+
+    // Any tab but Media: wait for the Media one.
+    NSArray* group = entries[(NSUInteger)tabIndex];
+    if (![group isKindOfClass:NSArray.class]) {
+        return;
+    }
+    NSUInteger photoIndex = [group indexOfObjectIdenticalTo:photoEntry];
+    if (photoIndex == NSNotFound) {
+        return;
+    }
+
+    // videoEntry may be built on demand instead of kept, in which case it is
+    // never the instance in the group; the Media group's other tab is.
+    id videoEntry = provider.videoEntry;
+    NSUInteger videoIndex = videoEntry ? [group indexOfObjectIdenticalTo:videoEntry] : NSNotFound;
+    if (videoIndex == NSNotFound && group.count == 2) {
+        videoIndex = 1 - photoIndex;
+    }
+    // A Videos page that already exists (opened or prewarmed) stays.
+    if (videoIndex == NSNotFound || EntryHasCachedViewController(group[videoIndex])) {
+        SettlePhotosDefault(provider);
+        return;
+    }
+
+    NSArray* active = provider.groupActiveIndices;
+    if (![active isKindOfClass:NSArray.class]) {
+        return;
+    }
+
+    // One slot per outer tab, or one per group. An array X hasn't filled yet
+    // fits neither and is left for a later call.
+    NSUInteger groupCount = 0;
+    NSUInteger groupOrdinal = 0;
+    for (NSUInteger i = 0; i < entries.count; i++) {
+        if ([entries[i] isKindOfClass:NSArray.class]) {
+            if (i < (NSUInteger)tabIndex) {
+                groupOrdinal++;
+            }
+            groupCount++;
+        }
+    }
+
+    NSUInteger slot;
+    if (active.count == entries.count) {
+        slot = (NSUInteger)tabIndex;
+    } else if (active.count == groupCount) {
+        slot = groupOrdinal;
+    } else {
+        return;
+    }
+
+    // Decided for this profile from here on, so a later tap on Videos sticks.
+    SettlePhotosDefault(provider);
+
+    id current = active[slot];
+    if (![current isKindOfClass:NSNumber.class] || [current integerValue] != (NSInteger)videoIndex) {
+        return;
+    }
+
+    NSMutableArray* updated = [active mutableCopy];
+    updated[slot] = @(photoIndex);
+    provider.groupActiveIndices = updated;
+}
+
+static void PreferPhotosInMediaGroup(T1ProfileViewController* profile, long long tabIndex) {
+    if (PreferringPhotos || ![BHTSettings boolForKey:@"profile_media_photos_first"]) {
+        return;
+    }
+
+    T1ProfileDisplayNormalMainContentProvider* provider = MainContentProvider(profile);
+    if (!provider || objc_getAssociatedObject(provider, PhotosDefaultSettledKey) ||
+        ![provider respondsToSelector:@selector(contentMainEntries)] ||
         ![provider respondsToSelector:@selector(groupActiveIndices)] ||
+        ![provider respondsToSelector:@selector(setGroupActiveIndices:)] ||
         ![provider respondsToSelector:@selector(photoEntry)] ||
         ![provider respondsToSelector:@selector(videoEntry)]) {
         return;
     }
 
-    NSMutableArray* activeIndices = provider.groupActiveIndices;
-    if (![activeIndices isKindOfClass:NSMutableArray.class] ||
-        objc_getAssociatedObject(activeIndices, PhotosFirstAppliedKey)) {
-        return;
-    }
-
-    id photoEntry = provider.photoEntry;
-    id videoEntry = provider.videoEntry;
-    if (!photoEntry) {
-        return;
-    }
-
-    NSUInteger groupCount = 0;
-    for (id entry in entries) {
-        if ([entry isKindOfClass:NSArray.class]) {
-            groupCount++;
-        }
-    }
-
-    NSUInteger groupOrdinal = 0;
-    for (NSUInteger tabIndex = 0; tabIndex < entries.count; tabIndex++) {
-        NSArray* group = entries[tabIndex];
-        if (![group isKindOfClass:NSArray.class]) {
-            continue;
-        }
-
-        NSUInteger photoIndex = [group indexOfObjectIdenticalTo:photoEntry];
-        if (photoIndex == NSNotFound) {
-            groupOrdinal++;
-            continue;
-        }
-
-        // videoEntry may be built on demand instead of kept, in which case it
-        // is never the instance in the group; the Media group's other tab is.
-        NSUInteger videoIndex = videoEntry ? [group indexOfObjectIdenticalTo:videoEntry] : NSNotFound;
-        if (videoIndex == NSNotFound && group.count == 2) {
-            videoIndex = 1 - photoIndex;
-        }
-        if (videoIndex == NSNotFound) {
-            return;
-        }
-
-        // One slot per outer tab, or one per group. Anything else (including
-        // an array X hasn't filled yet) is left for a later call.
-        NSUInteger slot;
-        if (activeIndices.count == entries.count) {
-            slot = tabIndex;
-        } else if (activeIndices.count == groupCount) {
-            slot = groupOrdinal;
-        } else {
-            return;
-        }
-
-        id current = activeIndices[slot];
-        if ([current isKindOfClass:NSNumber.class] &&
-            [current integerValue] == (NSInteger)videoIndex) {
-            @try {
-                activeIndices[slot] = @(photoIndex);
-            } @catch (__unused NSException* exception) {
-                // An immutable array behind the mutable type; leave it.
-            }
-        }
-        objc_setAssociatedObject(activeIndices, PhotosFirstAppliedKey, @YES,
-                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        return;
+    PreferringPhotos = YES;
+    @try {
+        PointMediaGroupAtPhotos(provider, tabIndex);
+    } @catch (__unused NSException* exception) {
+        // Whatever X's structure turned out to be, keep Videos and stop trying.
+        SettlePhotosDefault(provider);
+    } @finally {
+        PreferringPhotos = NO;
     }
 }
 
@@ -266,26 +316,33 @@ static void SelectPhotosInMediaGroup(T1ProfileDisplayNormalMainContentProvider* 
     return [(NSString*)original stringByReplacingCharactersInRange:range withString:fullCount];
 }
 
-// Media tab default, see SelectPhotosInMediaGroup().
-- (NSArray*)contentMainEntries {
-    NSArray* entries = %orig;
-    SelectPhotosInMediaGroup(self, entries);
-    return entries;
-}
-
 %end
 
+// Media tab default, see PreferPhotosInMediaGroup(). Whichever of these the
+// tab bar asks first for the Media tab settles it.
 %hook T1ProfileViewController
 
+- (id)segmentedViewController:(id)controller descriptorAtIndex:(long long)index {
+    PreferPhotosInMediaGroup(self, index);
+    return %orig;
+}
+
+- (id)segmentedViewController:(id)controller tabGroupAtIndex:(long long)index {
+    PreferPhotosInMediaGroup(self, index);
+    return %orig;
+}
+
+- (id)segmentedViewController:(id)controller pageViewControllerAtIndex:(long long)index {
+    PreferPhotosInMediaGroup(self, index);
+    return %orig;
+}
+
+// X opening a profile's Videos tab on purpose (the immersive player's link to
+// a profile's videos) beats the default.
 - (void)showProfileVideosTabWithPersist:(BOOL)persist {
-    NSArray* providers = [self respondsToSelector:@selector(displayContentProviders)]
-                             ? self.displayContentProviders
-                             : nil;
-    if ([providers isKindOfClass:NSArray.class]) {
-        for (id provider in providers) {
-            objc_setAssociatedObject(provider, VideosRequestedKey, @YES,
-                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
+    T1ProfileDisplayNormalMainContentProvider* provider = MainContentProvider(self);
+    if (provider) {
+        SettlePhotosDefault(provider);
     }
     %orig;
 }
