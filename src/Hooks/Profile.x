@@ -318,9 +318,44 @@ static void PreferPhotosInMediaGroup(T1ProfileViewController* profile, long long
 
 %end
 
-// Media tab default, see PreferPhotosInMediaGroup(). Whichever of these the
-// tab bar asks first for the Media tab settles it.
+// MARK: - Message/Follow buttons under the username
+
+// The large Message/Follow row is a subheader below the profile header, laid
+// out after the bio, stats and social proof. The header keeps no order of its
+// own: it asks the profile for its subheaders on every layout and stacks them
+// in the order given, so returning the row first puts it straight under the
+// name and @username. Only the returned copy is reordered.
+static NSArray* SubheadersWithActionButtonsFirst(NSArray* subheaders) {
+    Class buttonsClass = objc_getClass("T1ProfileActionButtonsSubheaderViewController");
+    if (!buttonsClass || ![subheaders isKindOfClass:NSArray.class] || subheaders.count < 2) {
+        return subheaders;
+    }
+
+    NSUInteger index = [subheaders indexOfObjectPassingTest:^BOOL(id subheader, NSUInteger idx, BOOL* stop) {
+        return [subheader isKindOfClass:buttonsClass];
+    }];
+    if (index == NSNotFound || index == 0) {
+        return subheaders;
+    }
+
+    NSMutableArray* reordered = [subheaders mutableCopy];
+    id buttons = reordered[index];
+    [reordered removeObjectAtIndex:index];
+    [reordered insertObject:buttons atIndex:0];
+    return [reordered copy];
+}
+
+// The subheader order (SubheadersWithActionButtonsFirst()), then the Media
+// tab default (PreferPhotosInMediaGroup()): whichever of the tab bar's data
+// source calls comes first for the Media tab settles it.
 %hook T1ProfileViewController
+
+- (id)resizableHeaderSubheaderViewControllersForResizableHeaderViewController:(id)controller {
+    id subheaders = %orig;
+    return [BHTSettings boolForKey:@"profile_buttons_under_username"]
+               ? SubheadersWithActionButtonsFirst(subheaders)
+               : subheaders;
+}
 
 - (id)segmentedViewController:(id)controller descriptorAtIndex:(long long)index {
     PreferPhotosInMediaGroup(self, index);

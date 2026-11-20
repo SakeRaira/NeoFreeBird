@@ -268,6 +268,11 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"type": @"toggle"
                     },
                     @{
+                        @"key": @"profile_buttons_under_username",
+                        @"default": @YES,
+                        @"type": @"toggle"
+                    },
+                    @{
                         @"key": @"restore_follow_button",
                         @"default": @NO,
                         @"type": @"toggle"

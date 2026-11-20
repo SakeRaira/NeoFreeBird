@@ -257,6 +257,8 @@
 "SHOW_UNROUNDED_COUNTS_DETAIL" = "フォロワー数、フォロー数、ポスト数を千や百万単位に丸めず、正確な数値で表示します。";
 "PROFILE_MEDIA_PHOTOS_FIRST_TITLE" = "メディア欄を画像から表示";
 "PROFILE_MEDIA_PHOTOS_FIRST_DETAIL" = "プロフィールのメディア欄を開いたときに、動画ではなく画像を最初に表示します。";
+"PROFILE_BUTTONS_UNDER_USERNAME_TITLE" = "ボタンをユーザー名の下に表示";
+"PROFILE_BUTTONS_UNDER_USERNAME_DETAIL" = "プロフィールのメッセージ・フォローボタンを、タブの上から@ユーザー名のすぐ下に移動します。";
 
 /*Search*/
 "NO_HISTORY_TITLE" = "検索履歴を残さない";

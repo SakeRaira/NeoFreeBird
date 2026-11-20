@@ -257,6 +257,8 @@
 "SHOW_UNROUNDED_COUNTS_DETAIL" = "Shows the exact number of followers, following, and tweets instead of rounding them to the nearest thousand or million.";
 "PROFILE_MEDIA_PHOTOS_FIRST_TITLE" = "Show photos first in Media";
 "PROFILE_MEDIA_PHOTOS_FIRST_DETAIL" = "Opens the Media tab on profiles with photos instead of videos.";
+"PROFILE_BUTTONS_UNDER_USERNAME_TITLE" = "Buttons under the username";
+"PROFILE_BUTTONS_UNDER_USERNAME_DETAIL" = "Moves the Message and Follow buttons on profiles from above the tabs to right under the @username.";
 
 /*Search*/
 "NO_HISTORY_TITLE" = "No search history";
