@@ -14,6 +14,8 @@
 #import "Headers/TWHeaders.h"
 #import "Settings/ModernSettingsCells.h"
 
+extern void applySensitiveHighlightSetting(void);
+
 static char kTweetSoundPickerPurposeKey;
 static NSString* const kTweetSoundPickerPurpose = @"tweetSound";
 static NSString* const kCustomSendSoundPathKey = @"custom_send_sound_path";
@@ -26,6 +28,14 @@ static NSString* const kCustomSendSoundNameKey = @"custom_send_sound_name";
 
 - (NSString*)pageKey {
     return @"tweets";
+}
+
+- (void)switchChanged:(UISwitch*)sender {
+    [super switchChanged:sender];
+    NSString* key = objc_getAssociatedObject(sender, @"prefKey");
+    if ([key isEqualToString:@"highlight_sensitive_tweets"]) {
+        applySensitiveHighlightSetting();
+    }
 }
 
 - (void)showAlertWithTitleKey:(NSString*)titleKey message:(NSString*)message {

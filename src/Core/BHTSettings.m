@@ -347,6 +347,11 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"type": @"toggle"
                     },
                     @{
+                        @"key": @"highlight_sensitive_tweets",
+                        @"default": @YES,
+                        @"type": @"toggle"
+                    },
+                    @{
                         @"key": @"show_poll_results",
                         @"default": @NO,
                         @"type": @"toggle"

@@ -42,6 +42,9 @@ void MarkEmptiedModuleChrome(NSArray* items, NSMutableIndexSet* removed);
 // Live square-avatar restyling (Avatars.x)
 void applySquareAvatarsSetting(void);
 
+// Live restyling of sensitive tweet highlights (SensitiveHighlight.x)
+void applySensitiveHighlightSetting(void);
+
 NSString* formatNumberWithSuffix(long long number);
 
 bool NFBLiquidGlassEnabled(void);

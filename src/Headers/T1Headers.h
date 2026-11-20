@@ -24,6 +24,15 @@
 @property (readonly, nonatomic) long long retweetCount;
 @end
 
+@interface TFNTwitterStatus (SensitiveHighlight)
+// The server's possibly_sensitive verdict, independent of whether the app
+// shows a warning for it.
+@property (readonly, nonatomic) BOOL isPossiblySensitive;
+@property (readonly, nonatomic) BOOL hasSensitiveMediaWarningsFlaggedByAuthor;
+// The retweeted original for a retweet, the status itself otherwise.
+@property (readonly, nonatomic) TFNTwitterStatus* representedStatus;
+@end
+
 @interface T1PostInteractionsViewController : UIViewController
 + (id)viewControllerWithAccount:(TFNTwitterAccount*)account
                        statusID:(long long)statusID
@@ -200,6 +209,9 @@
 @end
 
 @interface T1StatusCell : UITableViewCell <TTACoreStatusViewEventHandler>
+// T1StandardStatusView in timelines, T1ConversationFocalStatusView for the
+// focal tweet of a conversation.
+@property (readonly, nonatomic) UIView* statusView;
 @end
 
 @interface T1StatusInlineActionsView
