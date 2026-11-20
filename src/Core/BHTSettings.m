@@ -114,6 +114,14 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                       @"default": @NO},
                     @{@"key": @"hide_verified_tweets",
                       @"default": @NO},
+                    // Words that hide posts (BHTNGWords).
+                    @{
+                        @"type": @"compactButton",
+                        @"titleKey": @"NG_WORDS_TITLE",
+                        @"action": @"showNGWords:",
+                        @"prefKeyForSubtitle": @"ng_words_summary",
+                        @"subtitleDefaultKey": @"GENERIC_OFF_LABEL"
+                    },
                     @{@"key": @"restore_refresh_sounds",
                       @"default": @YES}
                 ]
@@ -269,6 +277,11 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                     },
                     @{
                         @"key": @"profile_buttons_under_username",
+                        @"default": @YES,
+                        @"type": @"toggle"
+                    },
+                    @{
+                        @"key": @"hide_tweet_button_on_profiles",
                         @"default": @YES,
                         @"type": @"toggle"
                     },

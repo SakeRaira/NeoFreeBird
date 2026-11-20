@@ -16,6 +16,7 @@
 #import <objc/runtime.h>
 #import "Core/BHTBundle.h"
 #import "Core/BHTManager.h"
+#import "Core/BHTNGWords.h"
 #import "Core/BHTSensitiveZones.h"
 #import "Core/BHTSettings.h"
 #import "CustomTabBar/CustomTabBarUtility.h"

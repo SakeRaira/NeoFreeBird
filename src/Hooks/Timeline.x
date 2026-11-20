@@ -359,6 +359,9 @@ static BOOL ItemIsRetweet(id viewModel) {
 @property (nonatomic) BOOL hideQuoteTweets;
 @property (nonatomic) BOOL hideRetweets;
 @property (nonatomic) BOOL hideBlockedRetweets;
+@property (nonatomic) BOOL hideNGWords;
+// BHTNGWords.generation the verdicts were made with.
+@property (nonatomic) NSUInteger ngWordsGeneration;
 
 // Surfaces.
 @property (nonatomic) BOOL inConversation;
@@ -435,11 +438,109 @@ static BOOL BHShouldHideVerifiedItem(id viewModel, BHTimelineFilterContext* cont
     return YES;
 }
 
+// MARK: - NG words
+
+// The return type of a real (not forwarded) zero-argument method, or 0. The
+// text lookup probes selectors like -status and -text across unrelated view
+// model classes, and one returning a scalar must never be called as if it
+// returned an object.
+static char NGReturnType(id object, SEL selector) {
+    if (!object) {
+        return 0;
+    }
+    Method method = class_getInstanceMethod(object_getClass(object), selector);
+    const char* encoding = method ? method_getTypeEncoding(method) : NULL;
+    return encoding ? encoding[0] : 0;
+}
+
+static id NGObjectForSelector(id object, SEL selector) {
+    if (NGReturnType(object, selector) != '@') {
+        return nil;
+    }
+    return ((id (*)(id, SEL))objc_msgSend)(object, selector);
+}
+
+static NSString* NGStringForSelector(id object, SEL selector) {
+    id value = NGObjectForSelector(object, selector);
+    return [value isKindOfClass:NSString.class] ? value : nil;
+}
+
+// Everything a timeline item says: its own text (with URLs expanded, and the
+// full text of long posts), plus that of the retweeted original and of the
+// quoted post. View models may be a TFNTwitterStatus or wrap one, sometimes
+// two deep.
+static NSString* ItemSearchableText(id viewModel) {
+    static NSArray<NSString*>* links;
+    static NSArray<NSString*>* textSelectors;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        links = @[@"statusViewModel", @"tweet", @"status", @"representedStatus",
+                  @"retweetedStatus", @"quotedStatus", @"quotedStatusViewModel"];
+        textSelectors = @[@"textWithExpandedURLs", @"fullText", @"text", @"displayText"];
+    });
+
+    NSHashTable* seen = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+    NSMutableArray* queue = [NSMutableArray arrayWithObject:viewModel];
+    [seen addObject:viewModel];
+    NSMutableArray<NSString*>* texts = [NSMutableArray array];
+
+    for (NSUInteger i = 0; i < queue.count && i < 16; i++) {
+        id object = queue[i];
+
+        for (NSString* name in textSelectors) {
+            NSString* text = NGStringForSelector(object, NSSelectorFromString(name));
+            if (text.length > 0) {
+                [texts addObject:text];
+                break;
+            }
+        }
+
+        NSString* noteText = NGStringForSelector(NGObjectForSelector(object, @selector(noteTweet)),
+                                                 @selector(text));
+        if (noteText.length > 0) {
+            [texts addObject:noteText];
+        }
+
+        for (NSString* name in links) {
+            id linked = NGObjectForSelector(object, NSSelectorFromString(name));
+            if (linked && ![seen containsObject:linked]) {
+                [seen addObject:linked];
+                [queue addObject:linked];
+            }
+        }
+    }
+
+    return [texts componentsJoinedByString:@"\n"];
+}
+
+static BOOL ItemMatchesNGWords(id viewModel, BHTimelineFilterContext* context) {
+    // In a conversation only replies are filtered; the post that was opened
+    // and the ones it replies to stay.
+    if (context.inConversation && !ItemIsConversationThreadReply(viewModel)) {
+        return NO;
+    }
+
+    // The account's own posts always stay.
+    long long currentAccountUserID = CurrentAccountUserID();
+    if (currentAccountUserID != 0 &&
+        (ItemRepresentedFromUserID(viewModel) == currentAccountUserID ||
+         AdditionalItemRepresentedFromUserID(viewModel) == currentAccountUserID)) {
+        return NO;
+    }
+
+    NSString* text = ItemSearchableText(viewModel);
+    return text.length > 0 && [BHTNGWords matchInText:text] != nil;
+}
+
 static BOOL ShouldHideTimelineItem(id item, BHTimelineFilterContext* context) {
     id viewModel = unwrapDataViewItem(item);
     NSString* className = NSStringFromClass([viewModel classForCoder]);
 
     if (context.hideVerified && BHShouldHideVerifiedItem(viewModel, context)) {
+        return YES;
+    }
+
+    if (context.hideNGWords && viewModel && ItemMatchesNGWords(viewModel, context)) {
         return YES;
     }
 
@@ -608,13 +709,20 @@ static NSSet<NSNumber*>* ConversationAuthorRepliedToUserIDs(NSArray* sections,
                               !inPostInteractions && !openedTweetFromProfile;
     context.hideRetweets = [BHTSettings boolForKey:@"hide_retweets"] &&
                            !inPostInteractions && !openedTweetFromProfile;
+    // Everywhere posts are served up (home, lists, search, replies), but not
+    // on a profile someone opened on purpose, in edit history or in
+    // notifications.
+    context.hideNGWords = BHTNGWords.active && !context.inProfile && !context.inEditHistory &&
+                          !context.inNotifications;
+    context.ngWordsGeneration = BHTNGWords.generation;
 
     return context;
 }
 
 - (BOOL)shouldFilter {
     return self.hideWhoToFollow || self.hidePrompts || self.hideVerified ||
-           self.hideQuoteTweets || self.hideRetweets || self.hideBlockedRetweets || self.inConversation;
+           self.hideQuoteTweets || self.hideRetweets || self.hideBlockedRetweets ||
+           self.hideNGWords || self.inConversation;
 }
 
 - (void)resolveConversationLookupsInSections:(NSArray*)sections {
@@ -642,6 +750,8 @@ static NSSet<NSNumber*>* ConversationAuthorRepliedToUserIDs(NSArray* sections,
            self.inSearch == other.inSearch &&
            self.hideQuoteTweets == other.hideQuoteTweets &&
            self.hideRetweets == other.hideRetweets &&
+           self.hideNGWords == other.hideNGWords &&
+           self.ngWordsGeneration == other.ngWordsGeneration &&
            self.conversationRootUserID == other.conversationRootUserID &&
            self.inEditHistory == other.inEditHistory &&
            (self.authorRepliedToUserIDs == other.authorRepliedToUserIDs ||

@@ -7,6 +7,7 @@
 
 #import "Settings/Pages/TimelinesSettingsViewController.h"
 #import "Headers/TWHeaders.h"
+#import "Settings/Pages/NGWordsViewController.h"
 
 extern void applyHideCustomTimelinesSetting(void);
 
@@ -14,6 +15,17 @@ extern void applyHideCustomTimelinesSetting(void);
 
 - (NSString*)pageKey {
     return @"timelines";
+}
+
+// The NG words row's subtitle summarizes what was set on its own page.
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self.tableView reloadData];
+}
+
+- (void)showNGWords:(NSDictionary*)sender {
+    NGWordsViewController* words = [[NGWordsViewController alloc] initWithAccount:self.account];
+    [self.navigationController pushViewController:words animated:YES];
 }
 
 - (void)switchChanged:(UISwitch*)sender {

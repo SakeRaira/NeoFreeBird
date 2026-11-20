@@ -259,6 +259,8 @@
 "PROFILE_MEDIA_PHOTOS_FIRST_DETAIL" = "プロフィールのメディア欄を開いたときに、動画ではなく画像を最初に表示します。";
 "PROFILE_BUTTONS_UNDER_USERNAME_TITLE" = "ボタンをユーザー名の下に表示";
 "PROFILE_BUTTONS_UNDER_USERNAME_DETAIL" = "プロフィールのメッセージ・フォローボタンを、タブの上から@ユーザー名のすぐ下に移動します。";
+"HIDE_TWEET_BUTTON_ON_PROFILES_TITLE" = "プロフィールでツイートボタンを非表示";
+"HIDE_TWEET_BUTTON_ON_PROFILES_DETAIL" = "アカウントの画面を開いている間、右下のツイート作成ボタンを非表示にします。";
 
 /*Search*/
 "NO_HISTORY_TITLE" = "検索履歴を残さない";
@@ -432,6 +434,21 @@
 
 "HIDE_VERIFIED_TWEETS_TITLE" = "認証アカウントのポスト非表示";
 "HIDE_VERIFIED_TWEETS_DETAIL" = "タイムラインと返信から認証済みアカウントのポストを非表示にします。ただし、そのアカウントをフォローしている場合や、投稿者が同じスレッド内で返信している場合は除きます。";
+"NG_WORDS_TITLE" = "NGワード";
+"NG_WORDS_SUMMARY_FORMAT" = "%ld 件";
+"NG_WORDS_ENABLED_TITLE" = "NGワードを含むツイートを非表示";
+"NG_WORDS_ENABLED_DETAIL" = "タイムライン、リスト、検索、返信から非表示にします。自分のツイートと、開いているプロフィール画面は対象外です。";
+"NG_WORDS_LIST_HEADER" = "NGワード";
+"NG_WORDS_LIST_FOOTER" = "大文字・小文字、全角・半角、ひらがな・カタカナの違いや、文字の間に挟まれた空白・改行・記号・絵文字は無視して判定します。リツイート元や引用されたツイートの本文も対象です。/で囲むと正規表現として扱います（例: /副業|稼げ\\d+/）。変更は次にタイムラインを読み込んだときから反映されます。";
+"NG_WORDS_ADD" = "ワードを追加";
+"NG_WORDS_EDIT" = "編集";
+"NG_WORDS_DELETE" = "削除";
+"NG_WORDS_ADD_MESSAGE" = "/で囲むと正規表現になります。";
+"NG_WORDS_PLACEHOLDER" = "例: 副業";
+"NG_WORDS_REGEX_LABEL" = "正規表現";
+"NG_WORDS_INVALID_REGEX" = "正規表現として読み取れませんでした。";
+"NG_WORDS_EMPTY_AFTER_NORMALIZE" = "空白や記号だけのワードは、すべてのツイートが非表示になるため登録できません。";
+"NG_WORDS_DUPLICATE" = "このワードはすでに登録されています。";
 
 "HIDE_TWEET_BUTTON_TITLE" = "ポストボタンを非表示";
 "HIDE_TWEET_BUTTON_DETAIL" = "ナビゲーションバーからポストボタンを削除します。";

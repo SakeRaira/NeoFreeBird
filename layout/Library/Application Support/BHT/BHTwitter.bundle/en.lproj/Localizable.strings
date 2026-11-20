@@ -259,6 +259,8 @@
 "PROFILE_MEDIA_PHOTOS_FIRST_DETAIL" = "Opens the Media tab on profiles with photos instead of videos.";
 "PROFILE_BUTTONS_UNDER_USERNAME_TITLE" = "Buttons under the username";
 "PROFILE_BUTTONS_UNDER_USERNAME_DETAIL" = "Moves the Message and Follow buttons on profiles from above the tabs to right under the @username.";
+"HIDE_TWEET_BUTTON_ON_PROFILES_TITLE" = "Hide Tweet button on profiles";
+"HIDE_TWEET_BUTTON_ON_PROFILES_DETAIL" = "Hides the floating compose button in the corner while a profile is open.";
 
 /*Search*/
 "NO_HISTORY_TITLE" = "No search history";
@@ -432,6 +434,21 @@
 
 "HIDE_VERIFIED_TWEETS_TITLE" = "Hide verified Tweets";
 "HIDE_VERIFIED_TWEETS_DETAIL" = "Hides Tweets from verified accounts in your timeline and replies, unless the author has replied to them in the same thread or you follow the account.";
+"NG_WORDS_TITLE" = "NG words";
+"NG_WORDS_SUMMARY_FORMAT" = "%ld words";
+"NG_WORDS_ENABLED_TITLE" = "Hide Tweets with NG words";
+"NG_WORDS_ENABLED_DETAIL" = "Hides them from your timelines, lists, search and replies. Your own Tweets and the profile you're viewing are never hidden.";
+"NG_WORDS_LIST_HEADER" = "Words";
+"NG_WORDS_LIST_FOOTER" = "Matching ignores upper and lower case, full- and half-width forms, hiragana vs katakana, and any spaces, line breaks, symbols or emoji put between the letters. The text of retweeted and quoted Tweets counts too. Wrap a word in slashes to use a regular expression, e.g. /side ?job|earn \\d+/. Changes apply from the next time a timeline loads.";
+"NG_WORDS_ADD" = "Add a word";
+"NG_WORDS_EDIT" = "Edit";
+"NG_WORDS_DELETE" = "Delete";
+"NG_WORDS_ADD_MESSAGE" = "Wrap it in slashes to use a regular expression.";
+"NG_WORDS_PLACEHOLDER" = "e.g. side job";
+"NG_WORDS_REGEX_LABEL" = "Regular expression";
+"NG_WORDS_INVALID_REGEX" = "That regular expression isn't valid.";
+"NG_WORDS_EMPTY_AFTER_NORMALIZE" = "A word made only of spaces or symbols would hide every Tweet.";
+"NG_WORDS_DUPLICATE" = "That word is already on the list.";
 
 "HIDE_TWEET_BUTTON_TITLE" = "Hide Tweet button";
 "HIDE_TWEET_BUTTON_DETAIL" = "Removes the Tweet button from the navigation bar.";

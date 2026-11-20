@@ -345,10 +345,115 @@ static NSArray* SubheadersWithActionButtonsFirst(NSArray* subheaders) {
     return [reordered copy];
 }
 
-// The subheader order (SubheadersWithActionButtonsFirst()), then the Media
-// tab default (PreferPhotosInMediaGroup()): whichever of the tab bar's data
-// source calls comes first for the Media tab settles it.
+// MARK: - Compose button on profiles
+
+// The floating compose button belongs to the tab navigation and stays on
+// screen over every page, profiles included. While any profile is showing it
+// is hidden; X shows it again by itself (after scrolling, on relayout), so it
+// is re-hidden whenever it tries.
+static const void* HiddenForProfileKey = &HiddenForProfileKey;
+
+static NSHashTable<UIViewController*>* VisibleProfiles(void) {
+    static NSHashTable* profiles;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        profiles = [NSHashTable weakObjectsHashTable];
+    });
+    return profiles;
+}
+
+static NSHashTable<UIView*>* FloatingComposeButtons(void) {
+    static NSHashTable* buttons;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        buttons = [NSHashTable weakObjectsHashTable];
+    });
+    return buttons;
+}
+
+static BOOL ShouldHideComposeButtonForProfile(void) {
+    return [BHTSettings boolForKey:@"hide_tweet_button_on_profiles"] &&
+           VisibleProfiles().allObjects.count > 0;
+}
+
+// The associated value is what the button was like before a profile hid it,
+// @[hidden, userInteractionEnabled], and is put back once no profile shows.
+static void ApplyProfileComposeButtonVisibility(UIView* button) {
+    NSArray<NSNumber*>* saved = objc_getAssociatedObject(button, HiddenForProfileKey);
+    if (ShouldHideComposeButtonForProfile()) {
+        if (!saved) {
+            objc_setAssociatedObject(button, HiddenForProfileKey,
+                                     @[@(button.hidden), @(button.userInteractionEnabled)],
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if (!button.hidden) {
+            button.hidden = YES;
+        }
+        if (button.userInteractionEnabled) {
+            button.userInteractionEnabled = NO;
+        }
+        return;
+    }
+
+    if (![saved isKindOfClass:NSArray.class] || saved.count != 2) {
+        return;
+    }
+    objc_setAssociatedObject(button, HiddenForProfileKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // "Hide the Tweet button" keeps it hidden everywhere (Misc.x).
+    if (![BHTSettings boolForKey:@"hide_tweet_button"]) {
+        button.hidden = saved[0].boolValue;
+        button.userInteractionEnabled = saved[1].boolValue;
+    }
+}
+
+static void ApplyProfileComposeButtonVisibilityEverywhere(void) {
+    for (UIView* button in FloatingComposeButtons().allObjects) {
+        ApplyProfileComposeButtonVisibility(button);
+    }
+}
+
+%hook TFNFloatingActionButton
+
+- (void)didMoveToWindow {
+    %orig;
+    if (self.window) {
+        [FloatingComposeButtons() addObject:self];
+    }
+    ApplyProfileComposeButtonVisibility(self);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    if (objc_getAssociatedObject(self, HiddenForProfileKey) || ShouldHideComposeButtonForProfile()) {
+        ApplyProfileComposeButtonVisibility(self);
+    }
+}
+
+- (void)showAnimated:(BOOL)animated completion:(id)completion {
+    %orig;
+    ApplyProfileComposeButtonVisibility(self);
+}
+
+%end
+
+// The subheader order (SubheadersWithActionButtonsFirst()), the Media tab
+// default (PreferPhotosInMediaGroup(): whichever of the tab bar's data source
+// calls comes first for the Media tab settles it) and the compose button.
 %hook T1ProfileViewController
+
+// Counted from about to appear until fully gone, so a cancelled swipe back
+// or a push on top keeps the right state.
+- (void)viewWillAppear:(BOOL)animated {
+    %orig;
+    [VisibleProfiles() addObject:self];
+    ApplyProfileComposeButtonVisibilityEverywhere();
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    [VisibleProfiles() removeObject:self];
+    ApplyProfileComposeButtonVisibilityEverywhere();
+}
 
 - (id)resizableHeaderSubheaderViewControllersForResizableHeaderViewController:(id)controller {
     id subheaders = %orig;
