@@ -684,6 +684,8 @@ static NSNumber* FeatureSwitchOverrideValueForKey(NSString* key) {
     return YES;
 }
 
+// Composing isn't viewing, so the places that bring warnings back for
+// viewing (BHTSensitiveZones) don't apply here.
 - (BOOL)isSensitiveTweetWarningsComposeEnabled {
     return [BHTSettings boolForKey:@"disable_sensitive_tweet_warnings"]
                ? NO
@@ -691,7 +693,7 @@ static NSNumber* FeatureSwitchOverrideValueForKey(NSString* key) {
 }
 
 - (BOOL)isSensitiveTweetWarningsConsumeEnabled {
-    return [BHTSettings boolForKey:@"disable_sensitive_tweet_warnings"]
+    return BHTSensitiveWarningsSuppressed()
                ? NO
                : %orig;
 }
@@ -941,30 +943,59 @@ static NSArray* panelIDsForDashSnapshot(NSArray* panelIDs) {
 
 %end
 
+// MARK: - Grok modifications of posted media
+
+// New attachments start with "Allow Grok modifications" off. Only the starting
+// value changes: the composer's and the photo editor's content settings read
+// it from the asset, so switching it back on there still sticks. Drafts come
+// back through -initWithCoder: and keep what they were saved with.
+@interface TTMAsset : NSObject
+@property (nonatomic) BOOL blockGrokModifications;
+@end
+
+%hook TTMAsset
+
+- (instancetype)init {
+    self = %orig;
+    if (self && [BHTSettings boolForKey:@"block_grok_modifications_by_default"]) {
+        // TTMAsset's own setter rather than a subclass override:
+        // TTMAssetXPhotoEditorImage forwards to an editor result it hasn't
+        // set up yet while it is still in -[super init].
+        SEL setter = @selector(setBlockGrokModifications:);
+        IMP baseSetter = class_getMethodImplementation(objc_getClass("TTMAsset"), setter);
+        if (baseSetter && [self respondsToSelector:setter]) {
+            ((void (*)(id, SEL, BOOL))baseSetter)(self, setter, YES);
+        }
+    }
+    return self;
+}
+
+%end
+
 // MARK: - Sensitive media warnings
 
 %hook TFNTwitterStatus
 
 - (BOOL)hasImageInterstitial {
-    return [BHTSettings boolForKey:@"disable_sensitive_tweet_warnings"]
+    return BHTSensitiveWarningsSuppressed()
                ? NO
                : %orig;
 }
 
 - (id)imageInterstitial {
-    return [BHTSettings boolForKey:@"disable_sensitive_tweet_warnings"]
+    return BHTSensitiveWarningsSuppressed()
                ? nil
                : %orig;
 }
 
 - (id)innerImageInterstitial {
-    return [BHTSettings boolForKey:@"disable_sensitive_tweet_warnings"]
+    return BHTSensitiveWarningsSuppressed()
                ? nil
                : %orig;
 }
 
 - (BOOL)isPossiblySensitiveViewModelForAccount:(id)account {
-    return [BHTSettings boolForKey:@"disable_sensitive_tweet_warnings"]
+    return BHTSensitiveWarningsSuppressed()
                ? NO
                : %orig;
 }
@@ -974,7 +1005,7 @@ static NSArray* panelIDsForDashSnapshot(NSArray* panelIDs) {
 %hook HFHealthSafetyFeature
 
 + (BOOL)isTweetMedialInterstitialEnabled:(id)featureSwitches {
-    return [BHTSettings boolForKey:@"disable_sensitive_tweet_warnings"]
+    return BHTSensitiveWarningsSuppressed()
                ? NO
                : %orig;
 }
@@ -996,6 +1027,17 @@ static NSArray* panelIDsForDashSnapshot(NSArray* panelIDs) {
 static char SensitiveMediaRevealPendingKey;
 static char SensitiveMediaButtonHiddenKey;
 
+// Overlays that have been on screen, so a change of place (BHTSensitiveZones)
+// can blur or reveal the ones still showing.
+static NSHashTable<HFSensitiveTweetBlurredInterstitialView*>* SensitiveMediaOverlays(void) {
+    static NSHashTable* overlays;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        overlays = [NSHashTable weakObjectsHashTable];
+    });
+    return overlays;
+}
+
 // X's own Show/Hide button, or nil until the overlay has created and attached it.
 static UIButton* BHTSensitiveMediaRevealButton(HFSensitiveTweetBlurredInterstitialView* overlay) {
     UIButton* button = nfb_objectIvar(overlay, "$__lazy_storage_$_showOrHideMediaButton");
@@ -1011,7 +1053,7 @@ static void BHTUpdateSensitiveMediaRevealButton(HFSensitiveTweetBlurredInterstit
         return;
     }
 
-    BOOL shouldHide = [BHTSettings boolForKey:@"disable_sensitive_tweet_warnings"] &&
+    BOOL shouldHide = BHTSensitiveWarningsSuppressed() &&
                       [overlay respondsToSelector:@selector(blurViewIsHidden)] &&
                       overlay.blurViewIsHidden;
     if (shouldHide && !button.hidden) {
@@ -1025,7 +1067,7 @@ static void BHTUpdateSensitiveMediaRevealButton(HFSensitiveTweetBlurredInterstit
 
 static void BHTRevealSensitiveMedia(HFSensitiveTweetBlurredInterstitialView* overlay) {
     if (!overlay.window || overlay.hidden ||
-        ![BHTSettings boolForKey:@"disable_sensitive_tweet_warnings"] ||
+        !BHTSensitiveWarningsSuppressed() ||
         ![overlay respondsToSelector:@selector(blurViewIsHidden)] || overlay.blurViewIsHidden ||
         ![overlay respondsToSelector:@selector(delegate)] ||
         ![overlay respondsToSelector:@selector(showOrHideMediaButtonPressed:)]) {
@@ -1050,7 +1092,7 @@ static void BHTRevealSensitiveMedia(HFSensitiveTweetBlurredInterstitialView* ove
 }
 
 static void BHTScheduleSensitiveMediaReveal(HFSensitiveTweetBlurredInterstitialView* overlay) {
-    if (!overlay.window || ![BHTSettings boolForKey:@"disable_sensitive_tweet_warnings"] ||
+    if (!overlay.window || !BHTSensitiveWarningsSuppressed() ||
         objc_getAssociatedObject(overlay, &SensitiveMediaRevealPendingKey)) {
         return;
     }
@@ -1071,6 +1113,9 @@ static void BHTScheduleSensitiveMediaReveal(HFSensitiveTweetBlurredInterstitialV
 
 - (void)didMoveToWindow {
     %orig;
+    if (self.window) {
+        [SensitiveMediaOverlays() addObject:self];
+    }
     BHTUpdateSensitiveMediaRevealButton(self);
     BHTScheduleSensitiveMediaReveal(self);
 }
@@ -1089,6 +1134,31 @@ static void BHTScheduleSensitiveMediaReveal(HFSensitiveTweetBlurredInterstitialV
 }
 
 %end
+
+// Entering a registered place blurs media that was revealed automatically
+// (or by hand) and brings X's Show button back; leaving reveals it again.
+// Tweets laid out while warnings were off have no overlay at all, so those
+// only pick up a warning once they are shown again.
+static void BHTApplySensitiveZoneChange(void) {
+    BOOL suppressed = BHTSensitiveWarningsSuppressed();
+    for (HFSensitiveTweetBlurredInterstitialView* overlay in SensitiveMediaOverlays().allObjects) {
+        if (!overlay.window || ![overlay respondsToSelector:@selector(blurViewIsHidden)]) {
+            continue;
+        }
+
+        if (suppressed) {
+            BHTScheduleSensitiveMediaReveal(overlay);
+            continue;
+        }
+
+        UIButton* button = BHTSensitiveMediaRevealButton(overlay);
+        if (overlay.blurViewIsHidden && button &&
+            [overlay respondsToSelector:@selector(showOrHideMediaButtonPressed:)]) {
+            [overlay showOrHideMediaButtonPressed:button];
+        }
+        BHTUpdateSensitiveMediaRevealButton(overlay);
+    }
+}
 
 // MARK: - Video upload quality
 %hook T1VideoQualityUploadSettings
@@ -1157,3 +1227,20 @@ static __thread NSUInteger NFBLiquidGlassInstallationDepth;
 */
 
 %end
+
+%ctor {
+    %init;
+
+    [NSNotificationCenter.defaultCenter addObserverForName:BHTSensitiveZonesDidChangeNotification
+                                                    object:nil
+                                                     queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification* notification) {
+                                                    BHTApplySensitiveZoneChange();
+                                                }];
+
+    // Start watching registered places at launch, so the first timeline
+    // already respects them.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        (void)BHTSensitiveZones.shared;
+    });
+}

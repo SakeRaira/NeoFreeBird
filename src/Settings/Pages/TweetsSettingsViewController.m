@@ -10,9 +10,11 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import <dlfcn.h>
 #import "Core/BHTBundle.h"
+#import "Core/BHTSensitiveZones.h"
 #import "Core/BHTSettings.h"
 #import "Headers/TWHeaders.h"
 #import "Settings/ModernSettingsCells.h"
+#import "Settings/Pages/SensitiveZonesViewController.h"
 
 extern void applySensitiveHighlightSetting(void);
 
@@ -35,7 +37,20 @@ static NSString* const kCustomSendSoundNameKey = @"custom_send_sound_name";
     NSString* key = objc_getAssociatedObject(sender, @"prefKey");
     if ([key isEqualToString:@"highlight_sensitive_tweets"]) {
         applySensitiveHighlightSetting();
+    } else if ([key isEqualToString:@"disable_sensitive_tweet_warnings"]) {
+        [BHTSensitiveZones.shared reload];
     }
+}
+
+// The places row's subtitle summarizes what was set on its own page.
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self.tableView reloadData];
+}
+
+- (void)showSensitiveZones:(NSDictionary*)sender {
+    SensitiveZonesViewController* zones = [[SensitiveZonesViewController alloc] initWithAccount:self.account];
+    [self.navigationController pushViewController:zones animated:YES];
 }
 
 - (void)showAlertWithTitleKey:(NSString*)titleKey message:(NSString*)message {

@@ -161,6 +161,36 @@
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_TITLE" = "Debug sensitive Tweet highlight";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "Shows a strip on the left edge of each Tweet: red for sensitive, green for not sensitive, yellow when the Tweet couldn't be inspected.";
 
+"SENSITIVE_ZONES_TITLE" = "Show warnings at places";
+"SENSITIVE_ZONES_SUMMARY_FORMAT" = "%1$ld places · %2$ld m";
+"SENSITIVE_ZONES_ENABLED_TITLE" = "Show warnings near these places";
+"SENSITIVE_ZONES_ENABLED_DETAIL" = "While you're in range of a place below, sensitive content warnings come back even though they're turned off.";
+"SENSITIVE_ZONES_RADIUS_TITLE" = "Range";
+"SENSITIVE_ZONES_STATUS_TITLE" = "Now";
+"SENSITIVE_ZONES_STATUS_OFF" = "Off";
+"SENSITIVE_ZONES_STATUS_NO_PLACES" = "No places added yet";
+"SENSITIVE_ZONES_STATUS_NEEDS_PERMISSION" = "Location access is off, so warnings are shown. Tap to allow it.";
+"SENSITIVE_ZONES_STATUS_LOCATING" = "Finding your location. Warnings are shown until then.";
+"SENSITIVE_ZONES_STATUS_INSIDE" = "In range of “%@”. Warnings are shown.";
+"SENSITIVE_ZONES_STATUS_OUTSIDE" = "Out of range of every place. Warnings are hidden.";
+"SENSITIVE_ZONES_PLACES_HEADER" = "Places";
+"SENSITIVE_ZONES_PLACES_FOOTER" = "Your location is only checked while the app is open and never leaves your device. When it can't be determined, warnings are shown to be safe.";
+"SENSITIVE_ZONES_ADD_CURRENT" = "Add current location";
+"SENSITIVE_ZONES_ADD_COORDINATES" = "Add by coordinates";
+"SENSITIVE_ZONES_COORDINATES_MESSAGE" = "Name the place and enter its latitude and longitude, e.g. 35.681236, 139.767125";
+"SENSITIVE_ZONES_INVALID_COORDINATES" = "Couldn't read those coordinates.";
+"SENSITIVE_ZONES_NAME_TITLE" = "Name this place";
+"SENSITIVE_ZONES_NAME_PLACEHOLDER" = "e.g. Office";
+"SENSITIVE_ZONES_DEFAULT_NAME" = "Place %ld";
+"SENSITIVE_ZONES_UNNAMED" = "Unnamed place";
+"SENSITIVE_ZONES_RENAME" = "Rename";
+"SENSITIVE_ZONES_DELETE" = "Delete";
+"SENSITIVE_ZONES_LOCATING" = "Finding your location…";
+"SENSITIVE_ZONES_LOCATION_FAILED" = "Couldn't get your current location.";
+"SENSITIVE_ZONES_LOCATION_DENIED_TITLE" = "Location access needed";
+"SENSITIVE_ZONES_LOCATION_DENIED_MESSAGE" = "Allow location access for this app in Settings.";
+"SENSITIVE_ZONES_OPEN_SETTINGS" = "Open Settings";
+
 "BYPASS_AGE_VERIFICATION_TITLE" = "Bypass age verification";
 "BYPASS_AGE_VERIFICATION_DETAIL" = "Skips the age verification flow for sensitive content.";
 
@@ -170,6 +200,8 @@
 
 "HIDE_GROK_CREATE_TITLE" = "Hide Grok creation buttons";
 "HIDE_GROK_CREATE_DETAIL" = "Removes the options to create or edit images and videos with Grok.";
+"BLOCK_GROK_MODIFICATIONS_BY_DEFAULT_TITLE" = "Block Grok edits by default";
+"BLOCK_GROK_MODIFICATIONS_BY_DEFAULT_DETAIL" = "Media you post starts with \"Allow Grok modifications\" off. You can still turn it on per post in the media's content settings.";
 
 "DISABLE_AUTO_TRANSLATE_TITLE" = "Disable auto translate";
 "DISABLE_AUTO_TRANSLATE_DETAIL" = "Never translate posts or bios automatically.";

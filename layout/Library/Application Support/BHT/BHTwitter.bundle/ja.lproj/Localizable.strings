@@ -161,6 +161,36 @@
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_TITLE" = "センシティブハイライトのデバッグ表示";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "各ツイートの左端に判定結果の色を表示します。赤: センシティブ、緑: 通常、黄: ツイートの情報を取得できない。";
 
+"SENSITIVE_ZONES_TITLE" = "警告を表示する場所";
+"SENSITIVE_ZONES_SUMMARY_FORMAT" = "%1$ld か所・%2$ld m";
+"SENSITIVE_ZONES_ENABLED_TITLE" = "登録した場所の近くでは警告を表示";
+"SENSITIVE_ZONES_ENABLED_DETAIL" = "下の場所の範囲内にいる間は、「センシティブ警告を非表示」がオンでも警告を表示します。";
+"SENSITIVE_ZONES_RADIUS_TITLE" = "範囲";
+"SENSITIVE_ZONES_STATUS_TITLE" = "現在の状態";
+"SENSITIVE_ZONES_STATUS_OFF" = "オフ";
+"SENSITIVE_ZONES_STATUS_NO_PLACES" = "場所がまだ登録されていません";
+"SENSITIVE_ZONES_STATUS_NEEDS_PERMISSION" = "位置情報が許可されていないため、警告を表示しています。タップして許可してください。";
+"SENSITIVE_ZONES_STATUS_LOCATING" = "現在地を確認中です。確認できるまで警告を表示します。";
+"SENSITIVE_ZONES_STATUS_INSIDE" = "「%@」の範囲内です。警告を表示しています。";
+"SENSITIVE_ZONES_STATUS_OUTSIDE" = "どの場所の範囲にも入っていません。警告を非表示にしています。";
+"SENSITIVE_ZONES_PLACES_HEADER" = "登録した場所";
+"SENSITIVE_ZONES_PLACES_FOOTER" = "位置情報はアプリを開いている間だけ確認し、端末の外には送信しません。現在地が分からないときは、安全のため警告を表示します。";
+"SENSITIVE_ZONES_ADD_CURRENT" = "現在地を追加";
+"SENSITIVE_ZONES_ADD_COORDINATES" = "座標を入力して追加";
+"SENSITIVE_ZONES_COORDINATES_MESSAGE" = "場所の名前と、緯度・経度を入力してください（例: 35.681236, 139.767125）";
+"SENSITIVE_ZONES_INVALID_COORDINATES" = "座標を読み取れませんでした。";
+"SENSITIVE_ZONES_NAME_TITLE" = "場所の名前";
+"SENSITIVE_ZONES_NAME_PLACEHOLDER" = "例: 職場";
+"SENSITIVE_ZONES_DEFAULT_NAME" = "場所 %ld";
+"SENSITIVE_ZONES_UNNAMED" = "名前のない場所";
+"SENSITIVE_ZONES_RENAME" = "名前を変更";
+"SENSITIVE_ZONES_DELETE" = "削除";
+"SENSITIVE_ZONES_LOCATING" = "現在地を取得しています…";
+"SENSITIVE_ZONES_LOCATION_FAILED" = "現在地を取得できませんでした。";
+"SENSITIVE_ZONES_LOCATION_DENIED_TITLE" = "位置情報の許可が必要です";
+"SENSITIVE_ZONES_LOCATION_DENIED_MESSAGE" = "設定アプリで、このアプリの位置情報を許可してください。";
+"SENSITIVE_ZONES_OPEN_SETTINGS" = "設定を開く";
+
 "BYPASS_AGE_VERIFICATION_TITLE" = "年齢確認をスキップ";
 "BYPASS_AGE_VERIFICATION_DETAIL" = "センシティブなコンテンツを表示する際の年齢確認をスキップします。";
 
@@ -170,6 +200,8 @@
 
 "HIDE_GROK_CREATE_TITLE" = "Grokの作成ボタンを非表示";
 "HIDE_GROK_CREATE_DETAIL" = "Grokで画像や動画を作成・編集するためのボタンを非表示にします。";
+"BLOCK_GROK_MODIFICATIONS_BY_DEFAULT_TITLE" = "Grokによる変更を最初から許可しない";
+"BLOCK_GROK_MODIFICATIONS_BY_DEFAULT_DETAIL" = "投稿するメディアの「Grokによる変更の許可」を最初からオフにします。投稿ごとに、コンテンツの設定からオンにできます。";
 
 "DISABLE_AUTO_TRANSLATE_TITLE" = "自動翻訳を無効にする";
 "DISABLE_AUTO_TRANSLATE_DETAIL" = "ポストやプロフィールを自動的に翻訳しないようにします。";

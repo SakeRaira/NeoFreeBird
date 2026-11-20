@@ -138,6 +138,11 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"type": @"toggle"
                     },
                     @{
+                        @"key": @"block_grok_modifications_by_default",
+                        @"default": @YES,
+                        @"type": @"toggle"
+                    },
+                    @{
                         @"key": @"disable_auto_translate",
                         @"default": @NO,
                         @"type": @"toggle"
@@ -352,6 +357,15 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"key": @"disable_sensitive_tweet_warnings",
                         @"default": @YES,
                         @"type": @"toggle"
+                    },
+                    // Places where the warnings come back (BHTSensitiveZones).
+                    @{
+                        @"type": @"compactButton",
+                        @"parentKey": @"disable_sensitive_tweet_warnings",
+                        @"titleKey": @"SENSITIVE_ZONES_TITLE",
+                        @"action": @"showSensitiveZones:",
+                        @"prefKeyForSubtitle": @"sensitive_zones_summary",
+                        @"subtitleDefaultKey": @"GENERIC_OFF_LABEL"
                     },
                     @{
                         @"key": @"highlight_sensitive_tweets",
