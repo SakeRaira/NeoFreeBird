@@ -156,6 +156,9 @@
 
 "DISABLE_SENSITIVE_TWEET_WARNINGS_TITLE" = "No sensitive content warnings";
 
+"HIGHLIGHT_SENSITIVE_TWEETS_TITLE" = "Highlight sensitive Tweets";
+"HIGHLIGHT_SENSITIVE_TWEETS_DETAIL" = "Tints Tweets marked as possibly sensitive light red.";
+
 "BYPASS_AGE_VERIFICATION_TITLE" = "Bypass age verification";
 "BYPASS_AGE_VERIFICATION_DETAIL" = "Skips the age verification flow for sensitive content.";
 
