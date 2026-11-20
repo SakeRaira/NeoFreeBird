@@ -501,6 +501,9 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                 @"settings": @[
                     @{@"key": @"flex_twitter",
                       @"default": @NO,
+                      @"type": @"toggle"},
+                    @{@"key": @"highlight_sensitive_tweets_debug",
+                      @"default": @NO,
                       @"type": @"toggle"}
                 ]
             }

@@ -158,6 +158,8 @@
 
 "HIGHLIGHT_SENSITIVE_TWEETS_TITLE" = "Highlight sensitive Tweets";
 "HIGHLIGHT_SENSITIVE_TWEETS_DETAIL" = "Tints Tweets marked as possibly sensitive light red.";
+"HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_TITLE" = "Debug sensitive Tweet highlight";
+"HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "Shows a strip on the left edge of each Tweet: red for sensitive, green for not sensitive, yellow when the Tweet couldn't be inspected.";
 
 "BYPASS_AGE_VERIFICATION_TITLE" = "Bypass age verification";
 "BYPASS_AGE_VERIFICATION_DETAIL" = "Skips the age verification flow for sensitive content.";

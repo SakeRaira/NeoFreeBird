@@ -8,6 +8,8 @@
 #import "Settings/Pages/DebugSettingsViewController.h"
 #import "Headers/TWHeaders.h"
 
+extern void applySensitiveHighlightSetting(void);
+
 @implementation DebugSettingsViewController
 
 - (NSString*)pageKey {
@@ -23,6 +25,8 @@
         } else {
             [[objc_getClass("FLEXManager") sharedManager] hideExplorer];
         }
+    } else if ([key isEqualToString:@"highlight_sensitive_tweets_debug"]) {
+        applySensitiveHighlightSetting();
     }
 }
 
