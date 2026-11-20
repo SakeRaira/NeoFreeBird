@@ -252,6 +252,13 @@
             @"action": @"showBrandingSettings"
         },
         @{
+            @"title": [[BHTBundle sharedBundle] localizedStringForKey:@"MODERN_SETTINGS_PERFORMANCE_TITLE"],
+            @"subtitle":
+                [[BHTBundle sharedBundle] localizedStringForKey:@"MODERN_SETTINGS_PERFORMANCE_SUBTITLE"],
+            @"icon": @"settings_stroke",
+            @"action": @"showPerformanceSettings"
+        },
+        @{
             @"title": [[BHTBundle sharedBundle] localizedStringForKey:@"MODERN_SETTINGS_PRESETS_TITLE"],
             @"subtitle":
                 [[BHTBundle sharedBundle] localizedStringForKey:@"MODERN_SETTINGS_PRESETS_SUBTITLE"],
@@ -790,6 +797,13 @@
     ModernSettingsPageViewController* vc =
         [[ModernSettingsPageViewController alloc] initWithAccount:self.account
                                                           pageKey:@"search"];
+    [self.navigationController pushViewController:vc animated:YES];
+}
+
+- (void)showPerformanceSettings {
+    ModernSettingsPageViewController* vc =
+        [[ModernSettingsPageViewController alloc] initWithAccount:self.account
+                                                          pageKey:@"performance"];
     [self.navigationController pushViewController:vc animated:YES];
 }
 

@@ -491,6 +491,24 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                     }
                 ]
             },
+            @"performance": @{
+                @"titleKey": @"MODERN_SETTINGS_PERFORMANCE_TITLE",
+                @"subtitleKey": @"MODERN_SETTINGS_PERFORMANCE_SUBTITLE",
+                @"settings": @[
+                    @{@"key": @"perf_no_frame_drop_reports",
+                      @"default": @YES,
+                      @"type": @"toggle"},
+                    @{@"key": @"perf_no_tracing",
+                      @"default": @YES,
+                      @"type": @"toggle"},
+                    @{@"key": @"perf_no_thread_diagnostics",
+                      @"default": @YES,
+                      @"type": @"toggle"},
+                    @{@"key": @"perf_no_watchdogs",
+                      @"default": @YES,
+                      @"type": @"toggle"}
+                ]
+            },
             @"presets": @{
                 @"titleKey": @"MODERN_SETTINGS_PRESETS_TITLE",
                 @"subtitleKey": @"MODERN_SETTINGS_PRESETS_SUBTITLE",

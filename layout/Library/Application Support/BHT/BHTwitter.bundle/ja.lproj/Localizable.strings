@@ -59,6 +59,16 @@
 
 "MODERN_SETTINGS_EXPERIMENTAL_TITLE" = "実験的機能";
 "MODERN_SETTINGS_EXPERIMENTAL_SUBTITLE" = "現在テスト中の実験的な機能を利用できます。";
+"MODERN_SETTINGS_PERFORMANCE_TITLE" = "軽量化";
+"MODERN_SETTINGS_PERFORMANCE_SUBTITLE" = "Xが自社の計測のためにバックグラウンドで行っている診断を止めます。変更はアプリの再起動後に反映されます。";
+"PERF_NO_FRAME_DROP_REPORTS_TITLE" = "カクつき時の記録を止める";
+"PERF_NO_FRAME_DROP_REPORTS_DETAIL" = "スクロールがカクつくたびに処理の状況（コールスタック）を記録する機能を止めます。アプリが重いときほど負担になる処理です。";
+"PERF_NO_TRACING_TITLE" = "処理時間の計測を止める";
+"PERF_NO_TRACING_DETAIL" = "起動、画面の読み込み、通信、ツイートの描画にかかった時間を計測してXに送る機能を止めます。";
+"PERF_NO_THREAD_DIAGNOSTICS_TITLE" = "スレッド情報の定期記録を止める";
+"PERF_NO_THREAD_DIAGNOSTICS_DETAIL" = "アプリ内のすべての処理（スレッド）の状態を定期的に記録する機能を止めます。";
+"PERF_NO_WATCHDOGS_TITLE" = "フリーズ監視を止める";
+"PERF_NO_WATCHDOGS_DETAIL" = "起動や画面が固まっていないかを見張るタイマーを止めます。この監視は、固まったと判断すると報告のためにアプリを終了させることがあります。";
 
 "MODERN_SETTINGS_DEBUG_TITLE" = "デバッグ";
 "MODERN_SETTINGS_DEBUG_SUBTITLE" = "機能が正常に動作しない原因を調査できます。";
