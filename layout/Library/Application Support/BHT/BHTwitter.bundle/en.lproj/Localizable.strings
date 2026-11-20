@@ -157,7 +157,7 @@
 "DISABLE_SENSITIVE_TWEET_WARNINGS_TITLE" = "No sensitive content warnings";
 
 "HIGHLIGHT_SENSITIVE_TWEETS_TITLE" = "Highlight sensitive Tweets";
-"HIGHLIGHT_SENSITIVE_TWEETS_DETAIL" = "Tints Tweets marked as possibly sensitive light red.";
+"HIGHLIGHT_SENSITIVE_TWEETS_DETAIL" = "Tints Tweets marked as possibly sensitive by the kind of content: pink for adult content, purple for graphic violence, orange for other, red when unspecified.";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_TITLE" = "Debug sensitive Tweet highlight";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "Shows a strip on the left edge of each Tweet: red for sensitive, green for not sensitive, yellow when the Tweet couldn't be inspected.";
 

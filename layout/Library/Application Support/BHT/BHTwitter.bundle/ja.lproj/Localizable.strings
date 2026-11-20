@@ -157,7 +157,7 @@
 "DISABLE_SENSITIVE_TWEET_WARNINGS_TITLE" = "センシティブ警告を非表示";
 
 "HIGHLIGHT_SENSITIVE_TWEETS_TITLE" = "センシティブなツイートをハイライト";
-"HIGHLIGHT_SENSITIVE_TWEETS_DETAIL" = "センシティブ判定が付いているツイートの背景を薄い赤色にします。";
+"HIGHLIGHT_SENSITIVE_TWEETS_DETAIL" = "センシティブ判定が付いているツイートの背景を内容の種類で色分けします。ピンク: 成人向け、紫: 暴力的、オレンジ: その他、赤: 種類不明。";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_TITLE" = "センシティブハイライトのデバッグ表示";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "各ツイートの左端に判定結果の色を表示します。赤: センシティブ、緑: 通常、黄: ツイートの情報を取得できない。";
 

@@ -2,9 +2,9 @@
 //  SensitiveHighlight.x
 //  NeoFreeBird
 //
-//  Tints the background of tweets that carry X's "possibly sensitive" flag a
-//  light red, so they stand out even when the sensitive content warnings are
-//  turned off.
+//  Tints the background of tweets that carry X's "possibly sensitive" flag,
+//  colored by the kind of sensitive media warning they carry, so they stand
+//  out even when the sensitive content warnings are turned off.
 //
 
 #import <QuartzCore/QuartzCore.h>
@@ -15,12 +15,27 @@ static NSString* const kHighlightSensitiveTweetsDebugKey = @"highlight_sensitive
 static const void* SensitiveHighlightLayerKey = &SensitiveHighlightLayerKey;
 static const void* SensitiveDebugMarkerKey = &SensitiveDebugMarkerKey;
 
+typedef NS_OPTIONS(NSUInteger, BHTSensitiveFlags) {
+    BHTSensitiveFlagged = 1 << 0,
+    BHTSensitiveAdultContent = 1 << 1,
+    BHTSensitiveGraphicViolence = 1 << 2,
+    BHTSensitiveOther = 1 << 3,
+};
+
 typedef NS_ENUM(NSInteger, BHTSensitiveVerdict) {
     // The cell had no status view or view model to inspect.
     BHTSensitiveVerdictUnknown,
     BHTSensitiveVerdictNotSensitive,
-    BHTSensitiveVerdictSensitive,
+    // Flagged, but no media warning says what kind of content it is.
+    BHTSensitiveVerdictUnspecified,
+    BHTSensitiveVerdictAdultContent,
+    BHTSensitiveVerdictGraphicViolence,
+    BHTSensitiveVerdictOther,
 };
+
+static BOOL VerdictIsSensitive(BHTSensitiveVerdict verdict) {
+    return verdict >= BHTSensitiveVerdictUnspecified;
+}
 
 // Every status cell that has been laid out, so toggling a setting can restyle
 // the cells on screen without walking the whole view tree.
@@ -33,28 +48,38 @@ static NSHashTable<T1StatusCell*>* TrackedStatusCells(void) {
     return cells;
 }
 
-// Translucent so the theme's own background still reads through. Dark mode
-// lands on the same dark maroon over Dim's navy as the reference design;
-// light mode is a pale pink over white.
-static UIColor* SensitiveHighlightColor(void) {
-    static UIColor* color;
+// MARK: - Colors
+
+static UIColor* TintRGBA(CGFloat red, CGFloat green, CGFloat blue, CGFloat alpha) {
+    return [UIColor colorWithRed:red / 255.0 green:green / 255.0 blue:blue / 255.0 alpha:alpha];
+}
+
+static UIColor* DynamicTint(UIColor* dark, UIColor* light) {
+    return [UIColor colorWithDynamicProvider:^UIColor*(UITraitCollection* traits) {
+        return traits.userInterfaceStyle == UIUserInterfaceStyleDark ? dark : light;
+    }];
+}
+
+// Translucent so the theme's own background still reads through. The dark
+// tints are 43% over the background: unspecified lands on the dark maroon of
+// the reference design over Dim's navy, and the others on a magenta, a violet
+// and a brown-orange of similar brightness. The light tints are the hue at low
+// opacity over white.
+static UIColor* HighlightColorForVerdict(BHTSensitiveVerdict verdict) {
+    static NSDictionary<NSNumber*, UIColor*>* colors;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        color = [UIColor colorWithDynamicProvider:^UIColor*(UITraitCollection* traits) {
-            if (traits.userInterfaceStyle == UIUserInterfaceStyleDark) {
-                return [UIColor colorWithRed:68.0 / 255.0
-                                       green:17.0 / 255.0
-                                        blue:0.0
-                                       alpha:0.43];
-            }
-            return [UIColor colorWithRed:1.0
-                                   green:59.0 / 255.0
-                                    blue:48.0 / 255.0
-                                   alpha:0.10];
-        }];
+        colors = @{
+            @(BHTSensitiveVerdictUnspecified): DynamicTint(TintRGBA(68, 17, 0, 0.43), TintRGBA(255, 59, 48, 0.10)),
+            @(BHTSensitiveVerdictAdultContent): DynamicTint(TintRGBA(93, 14, 41, 0.43), TintRGBA(255, 45, 146, 0.12)),
+            @(BHTSensitiveVerdictGraphicViolence): DynamicTint(TintRGBA(65, 19, 87, 0.43), TintRGBA(175, 82, 222, 0.12)),
+            @(BHTSensitiveVerdictOther): DynamicTint(TintRGBA(88, 41, 0, 0.43), TintRGBA(255, 149, 0, 0.14)),
+        };
     });
-    return color;
+    return colors[@(verdict)];
 }
+
+// MARK: - Safe selector probing
 
 // The return type of a real (not forwarded) zero-argument method, or 0. The
 // detection probes selectors like -status across unrelated classes, and one
@@ -69,6 +94,10 @@ static char ReturnTypeForSelector(id object, SEL selector) {
     return encoding ? encoding[0] : 0;
 }
 
+static BOOL ReturnTypeIsBool(char returnType) {
+    return returnType == 'B' || returnType == 'c';
+}
+
 static id ObjectForSelectorIfResponds(id object, SEL selector) {
     if (ReturnTypeForSelector(object, selector) != '@') {
         return nil;
@@ -77,8 +106,7 @@ static id ObjectForSelectorIfResponds(id object, SEL selector) {
 }
 
 static BOOL BoolForSelectorIfResponds(id object, SEL selector) {
-    char returnType = ReturnTypeForSelector(object, selector);
-    if (returnType != 'B' && returnType != 'c') {
+    if (!ReturnTypeIsBool(ReturnTypeForSelector(object, selector))) {
         return NO;
     }
     return ((BOOL (*)(id, SEL))objc_msgSend)(object, selector);
@@ -86,38 +114,62 @@ static BOOL BoolForSelectorIfResponds(id object, SEL selector) {
 
 // MARK: - Detection
 
-// Media the server attached a sensitive media warning to (adult content,
-// graphic violence, ...), whoever flagged it.
-static BOOL ObjectHasSensitiveMedia(id object) {
-    id entities = ObjectForSelectorIfResponds(object, @selector(entities));
-    NSArray* media = ObjectForSelectorIfResponds(entities, @selector(media));
-    if (![media isKindOfClass:NSArray.class]) {
-        return NO;
+// TFSTwitterSensitiveMediaWarning. Its only ObjC-visible member is
+// -hasAnyWarning, and it can exist with every category off. The categories
+// are plain Swift stored properties without ObjC getters, so they're read
+// from the ivars; if a future X renames them the warning still counts, just
+// without a category.
+static BHTSensitiveFlags FlagsForMediaWarning(id warning) {
+    if (!warning) {
+        return 0;
     }
 
-    for (id item in media) {
-        if (ObjectForSelectorIfResponds(item, @selector(sensitiveMediaWarning))) {
-            return YES;
-        }
+    if (ReturnTypeIsBool(ReturnTypeForSelector(warning, @selector(hasAnyWarning))) &&
+        !BoolForSelectorIfResponds(warning, @selector(hasAnyWarning))) {
+        return 0;
     }
-    return NO;
+
+    BHTSensitiveFlags flags = BHTSensitiveFlagged;
+    if (nfb_boolIvar(warning, "adultContent", NO)) {
+        flags |= BHTSensitiveAdultContent;
+    }
+    if (nfb_boolIvar(warning, "graphicViolence", NO)) {
+        flags |= BHTSensitiveGraphicViolence;
+    }
+    if (nfb_boolIvar(warning, "other", NO)) {
+        flags |= BHTSensitiveOther;
+    }
+    return flags;
 }
 
 // isPossiblySensitive is the raw server flag. The "no sensitive content
 // warnings" option only overrides the warning-level checks
 // (isPossiblySensitiveViewModelForAccount:, the image interstitials), so these
 // keep reporting the server's verdict with warnings turned off.
-static BOOL ObjectCarriesSensitiveFlag(id object) {
-    return BoolForSelectorIfResponds(object, @selector(isPossiblySensitive)) ||
-           BoolForSelectorIfResponds(object, @selector(hasSensitiveMediaWarningsFlaggedByAuthor)) ||
-           ObjectHasSensitiveMedia(object);
+static BHTSensitiveFlags FlagsForObject(id object) {
+    BHTSensitiveFlags flags = 0;
+    if (BoolForSelectorIfResponds(object, @selector(isPossiblySensitive)) ||
+        BoolForSelectorIfResponds(object, @selector(hasSensitiveMediaWarningsFlaggedByAuthor))) {
+        flags |= BHTSensitiveFlagged;
+    }
+
+    id entities = ObjectForSelectorIfResponds(object, @selector(entities));
+    NSArray* media = ObjectForSelectorIfResponds(entities, @selector(media));
+    if ([media isKindOfClass:NSArray.class]) {
+        for (id item in media) {
+            flags |= FlagsForMediaWarning(ObjectForSelectorIfResponds(item, @selector(sensitiveMediaWarning)));
+        }
+    }
+
+    return flags;
 }
 
 // Status views hold a view model that may be a TFNTwitterStatus or a Swift
 // adapter wrapping one (T1TwitterCoreStatusViewModelAdapter in 12.45), so
-// check the view model and everything it links to. Retweets are wrappers, so
-// the retweeted original counts; quoted tweets deliberately do not.
-static BOOL ViewModelIsFlaggedSensitive(id viewModel) {
+// collect flags from the view model and everything it links to. Retweets are
+// wrappers, so the retweeted original counts; quoted tweets deliberately do
+// not.
+static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
     static NSArray<NSString*>* links;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -129,11 +181,10 @@ static BOOL ViewModelIsFlaggedSensitive(id viewModel) {
     NSMutableArray* queue = [NSMutableArray arrayWithObject:viewModel];
     [seen addObject:viewModel];
 
+    BHTSensitiveFlags flags = 0;
     for (NSUInteger i = 0; i < queue.count && i < 16; i++) {
         id object = queue[i];
-        if (ObjectCarriesSensitiveFlag(object)) {
-            return YES;
-        }
+        flags |= FlagsForObject(object);
 
         for (NSString* name in links) {
             id linked = ObjectForSelectorIfResponds(object, NSSelectorFromString(name));
@@ -144,7 +195,24 @@ static BOOL ViewModelIsFlaggedSensitive(id viewModel) {
         }
     }
 
-    return NO;
+    return flags;
+}
+
+// Several categories can apply at once; the most severe one picks the color.
+static BHTSensitiveVerdict VerdictForFlags(BHTSensitiveFlags flags) {
+    if (!(flags & BHTSensitiveFlagged)) {
+        return BHTSensitiveVerdictNotSensitive;
+    }
+    if (flags & BHTSensitiveGraphicViolence) {
+        return BHTSensitiveVerdictGraphicViolence;
+    }
+    if (flags & BHTSensitiveAdultContent) {
+        return BHTSensitiveVerdictAdultContent;
+    }
+    if (flags & BHTSensitiveOther) {
+        return BHTSensitiveVerdictOther;
+    }
+    return BHTSensitiveVerdictUnspecified;
 }
 
 static UIView* StatusViewForCell(T1StatusCell* cell) {
@@ -156,8 +224,7 @@ static BHTSensitiveVerdict VerdictForStatusView(UIView* statusView) {
     if (!viewModel) {
         return BHTSensitiveVerdictUnknown;
     }
-    return ViewModelIsFlaggedSensitive(viewModel) ? BHTSensitiveVerdictSensitive
-                                                  : BHTSensitiveVerdictNotSensitive;
+    return VerdictForFlags(FlagsForViewModel(viewModel));
 }
 
 // MARK: - Drawing
@@ -247,26 +314,27 @@ static void PlaceHighlightLayer(CALayer* layer, T1StatusCell* cell, UIView* stat
     layer.frame = frame;
 }
 
-static void UpdateHighlightLayer(T1StatusCell* cell, UIView* statusView, BOOL show) {
-    CALayer* layer = SensitiveHighlightLayer(cell, show);
+// A nil color hides the highlight.
+static void UpdateHighlightLayer(T1StatusCell* cell, UIView* statusView, UIColor* color) {
+    CALayer* layer = SensitiveHighlightLayer(cell, color != nil);
     if (!layer) {
         return;
     }
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    layer.hidden = !show;
-    if (show) {
+    layer.hidden = color == nil;
+    if (color) {
         PlaceHighlightLayer(layer, cell, statusView);
-        layer.backgroundColor =
-            [SensitiveHighlightColor() resolvedColorWithTraitCollection:cell.traitCollection].CGColor;
+        layer.backgroundColor = [color resolvedColorWithTraitCollection:cell.traitCollection].CGColor;
     }
     [CATransaction commit];
 }
 
 // Debug aid: a strip on the leading edge of every tweet showing what the
-// detection decided. Red is sensitive, green is not, yellow means there was
-// nothing to inspect. No strip at all means the cell never reached this file.
+// detection decided. Red is sensitive (any kind), green is not, yellow means
+// there was nothing to inspect. No strip at all means the cell never reached
+// this file.
 static void UpdateDebugMarker(T1StatusCell* cell, BOOL show, BHTSensitiveVerdict verdict) {
     UIView* marker = objc_getAssociatedObject(cell, SensitiveDebugMarkerKey);
     if (!show) {
@@ -287,16 +355,12 @@ static void UpdateDebugMarker(T1StatusCell* cell, BOOL show, BHTSensitiveVerdict
         [container bringSubviewToFront:marker];
     }
 
-    switch (verdict) {
-        case BHTSensitiveVerdictSensitive:
-            marker.backgroundColor = UIColor.systemRedColor;
-            break;
-        case BHTSensitiveVerdictNotSensitive:
-            marker.backgroundColor = UIColor.systemGreenColor;
-            break;
-        case BHTSensitiveVerdictUnknown:
-            marker.backgroundColor = UIColor.systemYellowColor;
-            break;
+    if (VerdictIsSensitive(verdict)) {
+        marker.backgroundColor = UIColor.systemRedColor;
+    } else if (verdict == BHTSensitiveVerdictNotSensitive) {
+        marker.backgroundColor = UIColor.systemGreenColor;
+    } else {
+        marker.backgroundColor = UIColor.systemYellowColor;
     }
     marker.frame = CGRectMake(0, 0, 6, container.bounds.size.height);
     marker.hidden = NO;
@@ -315,7 +379,7 @@ static void UpdateSensitiveHighlight(T1StatusCell* cell) {
     BHTSensitiveVerdict verdict = (enabled || debug) ? VerdictForStatusView(statusView)
                                                      : BHTSensitiveVerdictUnknown;
 
-    UpdateHighlightLayer(cell, statusView, enabled && verdict == BHTSensitiveVerdictSensitive);
+    UpdateHighlightLayer(cell, statusView, enabled ? HighlightColorForVerdict(verdict) : nil);
     UpdateDebugMarker(cell, debug, verdict);
 }
 
