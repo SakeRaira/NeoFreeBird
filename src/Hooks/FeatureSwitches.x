@@ -1000,6 +1000,91 @@ static NSArray* panelIDsForDashSnapshot(NSArray* panelIDs) {
                : %orig;
 }
 
+- (BOOL)displaySensitiveContentAppealForAccount:(id)account {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
+%end
+
+// Timelines in 12.45 show the post through other view models (a Swift
+// adapter, URT timeline items, translated posts), each answering these
+// checks itself, so with only TFNTwitterStatus covered a timeline still
+// drew the "may contain sensitive content, change settings" tombstone where
+// the opened post showed the media.
+
+%hook T1TwitterCoreStatusViewModelAdapter
+
+- (BOOL)isPossiblySensitiveViewModelForAccount:(id)account {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
+- (BOOL)displaySensitiveContentAppealForAccount:(id)account {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
+- (BOOL)hasImageInterstitial {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
+- (id)imageInterstitial {
+    return BHTSensitiveWarningsSuppressed() ? nil : %orig;
+}
+
+- (id)innerImageInterstitial {
+    return BHTSensitiveWarningsSuppressed() ? nil : %orig;
+}
+
+%end
+
+%hook T1TranslatedStatusViewModel
+
+- (BOOL)isPossiblySensitiveViewModelForAccount:(id)account {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
+- (BOOL)displaySensitiveContentAppealForAccount:(id)account {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
+- (BOOL)hasImageInterstitial {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
+- (id)imageInterstitial {
+    return BHTSensitiveWarningsSuppressed() ? nil : %orig;
+}
+
+- (id)innerImageInterstitial {
+    return BHTSensitiveWarningsSuppressed() ? nil : %orig;
+}
+
+%end
+
+// TwitterURT.URTTimelineStatusItemViewModel
+%hook _TtC10TwitterURT30URTTimelineStatusItemViewModel
+
+- (BOOL)isPossiblySensitiveViewModelForAccount:(id)account {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
+- (BOOL)displaySensitiveContentAppealForAccount:(id)account {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
+- (BOOL)hasImageInterstitial {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
+%end
+
+// What the status view itself reads when choosing between media and the
+// tombstone.
+%hook TTAStatusViewCombinedViewModel
+
+- (BOOL)isPossiblySensitive {
+    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+}
+
 %end
 
 %hook HFHealthSafetyFeature
