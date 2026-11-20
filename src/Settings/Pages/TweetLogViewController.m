@@ -8,6 +8,7 @@
 #import <objc/runtime.h>
 #import "Core/BHTBundle.h"
 #import "Core/BHTManager.h"
+#import "Core/BHTNGWords.h"
 #import "Core/BHTTweetLog.h"
 #import "ThemeColor/Palette.h"
 
@@ -361,13 +362,61 @@ static NSString* SeenString(NSDate* date) {
 
 #pragma mark - View controller
 
-@interface TweetLogViewController ()
+@interface TweetLogViewController () <UISearchBarDelegate>
 @property (nonatomic, strong) UITableView* tableView;
+@property (nonatomic, strong) UISearchBar* searchBar;
 @property (nonatomic, strong) UILabel* summaryLabel;
 @property (nonatomic, strong) UILabel* emptyLabel;
+// Everything in the log, and the part of it matching the search (all of it
+// without one), which is what the table shows.
+@property (nonatomic, copy) NSArray<NSDictionary*>* allEntries;
 @property (nonatomic, copy) NSArray<NSDictionary*>* entries;
 @property (nonatomic) BOOL needsReload;
 @end
+
+#pragma mark - Search
+
+// What a search looks through, normalized like NG words (case, width and
+// kana insensitive, spaces and symbols ignored). Normalizing is the costly
+// part, so it is cached per entry for as long as the entry is unchanged.
+static NSString* SearchableTextOfEntry(NSDictionary* entry) {
+    static NSCache<NSString*, NSString*>* cache;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        cache = [NSCache new];
+        cache.countLimit = 6000;
+    });
+
+    NSDate* seen = [entry[@"seen"] isKindOfClass:NSDate.class] ? entry[@"seen"] : nil;
+    NSString* key = [NSString stringWithFormat:@"%@|%f", entry[@"id"], seen.timeIntervalSince1970];
+    NSString* cached = [cache objectForKey:key];
+    if (cached) {
+        return cached;
+    }
+
+    NSMutableArray<NSString*>* parts = [NSMutableArray array];
+    for (NSString* field in @[@"text", @"name", @"handle", @"rtBy"]) {
+        NSString* value = entry[field];
+        if ([value isKindOfClass:NSString.class] && value.length > 0) {
+            [parts addObject:value];
+        }
+    }
+    NSString* normalized = [BHTNGWords normalizedString:[parts componentsJoinedByString:@"\n"]];
+    [cache setObject:normalized forKey:key];
+    return normalized;
+}
+
+// Space-separated terms, every one of which has to appear.
+static NSArray<NSString*>* SearchTerms(NSString* query) {
+    NSMutableArray<NSString*>* terms = [NSMutableArray array];
+    for (NSString* word in [query componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]) {
+        NSString* term = [BHTNGWords normalizedString:word];
+        if (term.length > 0) {
+            [terms addObject:term];
+        }
+    }
+    return terms;
+}
 
 @implementation TweetLogViewController
 
@@ -387,6 +436,7 @@ static NSString* SeenString(NSDate* date) {
     self.tableView.rowHeight = UITableViewAutomaticDimension;
     self.tableView.estimatedRowHeight = 160;
     self.tableView.separatorInset = UIEdgeInsetsZero;
+    self.tableView.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
     [self.tableView registerClass:[TweetLogCell class] forCellReuseIdentifier:@"TweetLogCell"];
     self.tableView.tableHeaderView = [self makeHeaderView];
     [self.view addSubview:self.tableView];
@@ -417,9 +467,19 @@ static NSString* SeenString(NSDate* date) {
     return self.tableView;
 }
 
+// The search field, then the count with "Clear all" beside it.
 - (UIView*)makeHeaderView {
-    UIView* header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 320, 44)];
+    UIView* header = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 320, 100)];
     header.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+
+    self.searchBar = [UISearchBar new];
+    self.searchBar.translatesAutoresizingMaskIntoConstraints = NO;
+    self.searchBar.searchBarStyle = UISearchBarStyleMinimal;
+    self.searchBar.placeholder = L(@"TWEET_LOG_SEARCH_PLACEHOLDER");
+    self.searchBar.delegate = self;
+    self.searchBar.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.searchBar.searchTextField.textColor = PrimaryTextColor();
+    [header addSubview:self.searchBar];
 
     self.summaryLabel = [UILabel new];
     self.summaryLabel.translatesAutoresizingMaskIntoConstraints = NO;
@@ -436,13 +496,28 @@ static NSString* SeenString(NSDate* date) {
     [header addSubview:clear];
 
     [NSLayoutConstraint activateConstraints:@[
+        [self.searchBar.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:8],
+        [self.searchBar.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-8],
+        [self.searchBar.topAnchor constraintEqualToAnchor:header.topAnchor constant:4],
+        [self.searchBar.heightAnchor constraintEqualToConstant:52],
         [self.summaryLabel.leadingAnchor constraintEqualToAnchor:header.leadingAnchor constant:16],
-        [self.summaryLabel.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
+        [self.summaryLabel.centerYAnchor constraintEqualToAnchor:clear.centerYAnchor],
         [clear.trailingAnchor constraintEqualToAnchor:header.trailingAnchor constant:-16],
-        [clear.centerYAnchor constraintEqualToAnchor:header.centerYAnchor],
+        [clear.topAnchor constraintEqualToAnchor:self.searchBar.bottomAnchor],
+        [clear.bottomAnchor constraintEqualToAnchor:header.bottomAnchor],
         [clear.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.summaryLabel.trailingAnchor constant:12],
     ]];
     return header;
+}
+
+#pragma mark - UISearchBarDelegate
+
+- (void)searchBar:(UISearchBar*)searchBar textDidChange:(NSString*)searchText {
+    [self applySearch];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar*)searchBar {
+    [searchBar resignFirstResponder];
 }
 
 - (void)logDidChange {
@@ -456,9 +531,38 @@ static NSString* SeenString(NSDate* date) {
 
 - (void)reloadEntries {
     self.needsReload = NO;
-    self.entries = [BHTTweetLog entries];
-    self.summaryLabel.text = [NSString stringWithFormat:L(@"TWEET_LOG_COUNT_FORMAT"),
-                                                        (long)self.entries.count, (long)BHTTweetLog.limit];
+    self.allEntries = [BHTTweetLog entries];
+    [self applySearch];
+}
+
+- (void)applySearch {
+    NSArray<NSString*>* terms = SearchTerms(self.searchBar.text ?: @"");
+    if (terms.count == 0) {
+        self.entries = self.allEntries;
+        self.summaryLabel.text = [NSString stringWithFormat:L(@"TWEET_LOG_COUNT_FORMAT"),
+                                                            (long)self.allEntries.count, (long)BHTTweetLog.limit];
+        self.emptyLabel.text = L(@"TWEET_LOG_EMPTY");
+    } else {
+        NSMutableArray* matches = [NSMutableArray array];
+        for (NSDictionary* entry in self.allEntries) {
+            NSString* haystack = SearchableTextOfEntry(entry);
+            BOOL matchesAll = YES;
+            for (NSString* term in terms) {
+                if ([haystack rangeOfString:term].location == NSNotFound) {
+                    matchesAll = NO;
+                    break;
+                }
+            }
+            if (matchesAll) {
+                [matches addObject:entry];
+            }
+        }
+        self.entries = matches;
+        self.summaryLabel.text = [NSString stringWithFormat:L(@"TWEET_LOG_SEARCH_COUNT_FORMAT"),
+                                                            (long)self.allEntries.count, (long)matches.count];
+        self.emptyLabel.text = L(@"TWEET_LOG_SEARCH_EMPTY");
+    }
+
     self.tableView.backgroundView = self.entries.count == 0 ? self.emptyLabel : nil;
     [self.tableView reloadData];
 }

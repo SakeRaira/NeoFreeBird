@@ -219,32 +219,84 @@ static UIViewController* TweetLogPage(id container) {
     return page;
 }
 
-// A label tab styled like `reference`, X's own first tab: the same colors and
-// accessories, with its main slot replaced by the label.
-static id TweetLogTabDescriptor(id reference) {
+static NSString* TweetLogTabTitle(void) {
+    return [[BHTBundle sharedBundle] localizedStringForKey:@"TWEET_LOG_TAB_TITLE"];
+}
+
+static id TabSlot(SEL selector, id argument, BOOL persists) {
     Class slotClass = objc_getClass("_TtC10TFNUISwift13LegacyTabSlot");
+    if (![slotClass respondsToSelector:selector]) {
+        return nil;
+    }
+    return ((id (*)(id, SEL, id, BOOL))objc_msgSend)(slotClass, selector, argument, persists);
+}
+
+static id TweetLogTabLabelSlot(void) {
+    return TabSlot(@selector(label:persistsWhenDeselected:), TweetLogTabTitle(), YES);
+}
+
+// What goes where X's first tab (Bookmarks) has an extra slot, such as a
+// folder caret, which the added tab shouldn't show: a zero-width spacer, so
+// a slot that can't be empty still isn't. Nothing where it has nothing.
+static id BlankInPlaceOf(id slot) {
+    if (!slot) {
+        return nil;
+    }
+    Class slotClass = objc_getClass("_TtC10TFNUISwift13LegacyTabSlot");
+    SEL spacer = @selector(spacer:persistsWhenDeselected:);
+    if (![slotClass respondsToSelector:spacer]) {
+        return slot;
+    }
+    id blank = ((id (*)(id, SEL, double, BOOL))objc_msgSend)(slotClass, spacer, 0, YES);
+    return blank ?: slot;
+}
+
+// A label tab styled like `reference`, X's own first tab: its colors, with
+// its main slot replaced by the label and its extras blanked out.
+static id TweetLogTabDescriptor(id reference) {
     Class descriptorClass = objc_getClass("_TtC10TFNUISwift19LegacyTabDescriptor");
-    SEL labelSelector = @selector(label:persistsWhenDeselected:);
     SEL initSelector = @selector(initWithLeadingAccessory:leadingMain:trailingMain:trailingAccessory:tabAccessibilityLabel:selectedColor:deselectedColor:highlightBarColor:);
-    if (!slotClass || !descriptorClass || !reference || ![slotClass respondsToSelector:labelSelector] ||
-        ![descriptorClass instancesRespondToSelector:initSelector]) {
+    id label = TweetLogTabLabelSlot();
+    if (!descriptorClass || !reference || !label || ![descriptorClass instancesRespondToSelector:initSelector]) {
         return nil;
     }
 
-    NSString* title = [[BHTBundle sharedBundle] localizedStringForKey:@"TWEET_LOG_TAB_TITLE"];
-    id label = ((id (*)(id, SEL, id, BOOL))objc_msgSend)(slotClass, labelSelector, title, YES);
-    UIColor* selected = BHTSafeObject(reference, @selector(selectedColor));
-    UIColor* deselected = BHTSafeObject(reference, @selector(deselectedColor));
-    UIColor* highlight = BHTSafeObject(reference, @selector(highlightBarColor));
-    if (!label || !selected || !deselected || !highlight) {
-        return nil;
-    }
-
+    // Colors X leaves unset (it then uses the theme's) stay unset; nil where
+    // the reference has nil is known to be accepted.
     return ((id (*)(id, SEL, id, id, id, id, id, id, id, id))objc_msgSend)(
         [descriptorClass alloc], initSelector,
-        BHTSafeObject(reference, @selector(leadingAccessory)), label,
-        BHTSafeObject(reference, @selector(trailingMain)),
-        BHTSafeObject(reference, @selector(trailingAccessory)), title, selected, deselected, highlight);
+        BlankInPlaceOf(BHTSafeObject(reference, @selector(leadingAccessory))), label,
+        BlankInPlaceOf(BHTSafeObject(reference, @selector(trailingMain))),
+        BlankInPlaceOf(BHTSafeObject(reference, @selector(trailingAccessory))), TweetLogTabTitle(),
+        BHTSafeObject(reference, @selector(selectedColor)),
+        BHTSafeObject(reference, @selector(deselectedColor)),
+        BHTSafeObject(reference, @selector(highlightBarColor)));
+}
+
+// Fallback for when a new descriptor can't be made: relabels one X has just
+// built, the same way as above.
+static BOOL RelabelTabDescriptor(id descriptor) {
+    id label = TweetLogTabLabelSlot();
+    if (!label || ![descriptor respondsToSelector:@selector(setLeadingMain:)]) {
+        return NO;
+    }
+
+    ((void (*)(id, SEL, id))objc_msgSend)(descriptor, @selector(setLeadingMain:), label);
+    for (NSString* name in @[@"leadingAccessory", @"trailingMain", @"trailingAccessory"]) {
+        id slot = BHTSafeObject(descriptor, NSSelectorFromString(name));
+        NSString* setterName = [NSString stringWithFormat:@"set%@%@:",
+                                                          [[name substringToIndex:1] uppercaseString],
+                                                          [name substringFromIndex:1]];
+        SEL setter = NSSelectorFromString(setterName);
+        if (slot && [descriptor respondsToSelector:setter]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(descriptor, setter, BlankInPlaceOf(slot));
+        }
+    }
+    if ([descriptor respondsToSelector:@selector(setTabAccessibilityLabel:)]) {
+        ((void (*)(id, SEL, id))objc_msgSend)(descriptor, @selector(setTabAccessibilityLabel:),
+                                              TweetLogTabTitle());
+    }
+    return YES;
 }
 
 %hook _TtC16XActivityHistory38ActivityHistoryContainerViewController
@@ -269,7 +321,18 @@ static id TweetLogTabDescriptor(id reference) {
         return %orig;
     }
     id reference = %orig(controller, 0);
-    return TweetLogTabDescriptor(reference) ?: reference;
+    id descriptor = TweetLogTabDescriptor(reference);
+    if (descriptor) {
+        return descriptor;
+    }
+
+    // X builds descriptors anew on each call unless it caches them; only a
+    // fresh one can be relabelled without renaming X's own first tab.
+    id fresh = %orig(controller, 0);
+    if (fresh && fresh != reference && RelabelTabDescriptor(fresh)) {
+        return fresh;
+    }
+    return reference;
 }
 
 - (id)cachedPageViewControllersIn:(id)controller {
