@@ -19,6 +19,64 @@ static BOOL ShouldKeepBrowserURLInApp(NSURL* url) {
            [urlStr containsString:@"x.com/account/"] || [urlStr containsString:@"x.com/i/flow/"];
 }
 
+// YouTube's app takes its https links as universal links, but a sideloaded
+// (tweaked) YouTube usually isn't entitled to them, so those links land in
+// Safari. It still claims the youtube:// scheme, so a YouTube link is handed
+// to that instead, in the www.youtube.com form the app understands (youtu.be
+// short links become watch?v=). YouTube Music has an app of its own and is
+// left alone.
+static NSURL* YouTubeAppURL(NSURL* url) {
+    NSString* host = url.host.lowercaseString;
+    NSURLComponents* components = [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:NO];
+    if (host.length == 0 || !components) {
+        return nil;
+    }
+
+    if ([host isEqualToString:@"youtu.be"]) {
+        NSString* videoID = [components.path
+            stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"/"]];
+        if (videoID.length == 0 || [videoID containsString:@"/"]) {
+            return nil;
+        }
+        NSMutableArray<NSURLQueryItem*>* items =
+            [NSMutableArray arrayWithObject:[NSURLQueryItem queryItemWithName:@"v" value:videoID]];
+        for (NSURLQueryItem* item in components.queryItems) {
+            if (![item.name isEqualToString:@"v"]) {
+                [items addObject:item];
+            }
+        }
+        components.path = @"/watch";
+        components.queryItems = items;
+    } else if (![host isEqualToString:@"youtube.com"] && ![host isEqualToString:@"www.youtube.com"] &&
+               ![host isEqualToString:@"m.youtube.com"]) {
+        return nil;
+    }
+
+    components.scheme = @"youtube";
+    components.host = @"www.youtube.com";
+    return components.URL;
+}
+
+// Opens a link outside the app: YouTube links in the YouTube app when one
+// takes the scheme, falling back to the web link (Safari) otherwise, and
+// everything else as is.
+static void OpenURLOutsideApp(NSURL* url) {
+    UIApplication* application = UIApplication.sharedApplication;
+    NSURL* youTubeURL = YouTubeAppURL(url);
+    if (!youTubeURL) {
+        [application openURL:url options:@{} completionHandler:nil];
+        return;
+    }
+
+    [application openURL:youTubeURL
+                  options:@{}
+        completionHandler:^(BOOL success) {
+            if (!success) {
+                [application openURL:url options:@{} completionHandler:nil];
+            }
+        }];
+}
+
 // Every tapped link that resolves to the in-app Safari goes through this single
 // present funnel, so diverting here avoids presenting anything at all.
 %hook T1SafariViewController
@@ -35,7 +93,7 @@ static BOOL ShouldKeepBrowserURLInApp(NSURL* url) {
         return %orig;
     }
 
-    [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+    OpenURLOutsideApp(url);
 
     if (completion) {
         completion();
@@ -58,7 +116,7 @@ static BOOL ShouldKeepBrowserURLInApp(NSURL* url) {
         return %orig;
     }
 
-    [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+    OpenURLOutsideApp(url);
     [self dismissViewControllerAnimated:NO completion:nil];
 }
 
