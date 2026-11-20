@@ -348,9 +348,10 @@ static NSArray* SubheadersWithActionButtonsFirst(NSArray* subheaders) {
 // MARK: - Compose button on profiles
 
 // The floating compose button belongs to the tab navigation and stays on
-// screen over every page, profiles included. While any profile is showing it
-// is hidden; X shows it again by itself (after scrolling, on relayout), so it
-// is re-hidden whenever it tries.
+// screen over every page, profiles included. While someone else's profile is
+// showing it is hidden (on the account's own profile it stays, for posting
+// from there); X shows it again by itself (after scrolling, on relayout), so
+// it is re-hidden whenever it tries.
 static const void* HiddenForProfileKey = &HiddenForProfileKey;
 
 static NSHashTable<UIViewController*>* VisibleProfiles(void) {
@@ -371,9 +372,24 @@ static NSHashTable<UIView*>* FloatingComposeButtons(void) {
     return buttons;
 }
 
+// Asked each time rather than when the profile appears: the view model can
+// still be loading then.
+static BOOL ProfileIsOwn(UIViewController* profile) {
+    id viewModel = BHTSafeObject(profile, @selector(viewModel));
+    return BHTSafeBool(viewModel, @selector(isViewingOwnProfile)) ||
+           BHTSafeBool(viewModel, @selector(viewingOwnProfile));
+}
+
 static BOOL ShouldHideComposeButtonForProfile(void) {
-    return [BHTSettings boolForKey:@"hide_tweet_button_on_profiles"] &&
-           VisibleProfiles().allObjects.count > 0;
+    if (![BHTSettings boolForKey:@"hide_tweet_button_on_profiles"]) {
+        return NO;
+    }
+    for (UIViewController* profile in VisibleProfiles().allObjects) {
+        if (!ProfileIsOwn(profile)) {
+            return YES;
+        }
+    }
+    return NO;
 }
 
 // The associated value is what the button was like before a profile hid it,
@@ -446,6 +462,13 @@ static void ApplyProfileComposeButtonVisibilityEverywhere(void) {
 - (void)viewWillAppear:(BOOL)animated {
     %orig;
     [VisibleProfiles() addObject:self];
+    ApplyProfileComposeButtonVisibilityEverywhere();
+}
+
+// Once on screen the view model knows whose profile this is, which it may
+// not have yet when the profile is about to appear.
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
     ApplyProfileComposeButtonVisibilityEverywhere();
 }
 

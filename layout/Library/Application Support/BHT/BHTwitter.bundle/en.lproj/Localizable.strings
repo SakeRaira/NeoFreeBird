@@ -270,7 +270,7 @@
 "PROFILE_BUTTONS_UNDER_USERNAME_TITLE" = "Buttons under the username";
 "PROFILE_BUTTONS_UNDER_USERNAME_DETAIL" = "Moves the Message and Follow buttons on profiles from above the tabs to right under the @username.";
 "HIDE_TWEET_BUTTON_ON_PROFILES_TITLE" = "Hide Tweet button on profiles";
-"HIDE_TWEET_BUTTON_ON_PROFILES_DETAIL" = "Hides the floating compose button in the corner while a profile is open.";
+"HIDE_TWEET_BUTTON_ON_PROFILES_DETAIL" = "Hides the floating compose button in the corner while someone else's profile is open. It stays on your own.";
 
 /*Search*/
 "NO_HISTORY_TITLE" = "No search history";
