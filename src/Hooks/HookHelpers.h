@@ -72,6 +72,14 @@ void applyHideCustomTimelinesSetting(void);
 // gates (FeatureSwitches.x)
 BOOL panelIsGenuinelyAvailable(long long panelID);
 
+// Panels always kept out of the side drawer, and a fresh drawer snapshot
+// after the sidebar editor changes something (FeatureSwitches.x)
+BOOL BHTSidebarPanelIsForcedHidden(long long panelID);
+void applySidebarItemsSetting(void);
+
+// Live For You tab hiding when the setting is toggled (HomeBars.x)
+void applyHideForYouTabSetting(void);
+
 // Web session cookie harvesting (WebCreateTweet.x)
 void prewarmWebCookiesIfNeeded(void);
 void maybeHandleHarvestWebView(__unsafe_unretained id webViewController);

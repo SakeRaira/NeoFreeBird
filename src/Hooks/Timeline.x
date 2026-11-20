@@ -342,6 +342,82 @@ static BOOL ItemIsRetweet(id viewModel) {
     return YES;
 }
 
+// MARK: - Replies in the home timeline
+
+// A reply to someone else: the posts a followed account sends into other
+// people's threads. Replies to oneself (threads), the account's own replies
+// and retweets of a reply (shared on purpose) stay.
+static BOOL ItemIsReplyToOthers(id viewModel) {
+    if (!viewModel || ItemRespondsAndInvokesBOOL(viewModel, @selector(isRetweet))) {
+        return NO;
+    }
+
+    BOOL isReply = BHTSafeBool(viewModel, @selector(isReply)) ||
+                   BHTSafeLongLong(viewModel, @selector(inReplyToStatusID)) != 0;
+    if (!isReply) {
+        return NO;
+    }
+
+    long long authorID = ItemRepresentedFromUserID(viewModel);
+    if (authorID == 0) {
+        authorID = AdditionalItemRepresentedFromUserID(viewModel);
+    }
+    long long repliedToUserID = ItemInReplyToUserID(viewModel);
+    if (authorID != 0 && repliedToUserID == authorID) {
+        return NO;
+    }
+
+    long long currentAccountUserID = CurrentAccountUserID();
+    return currentAccountUserID == 0 || authorID != currentAccountUserID;
+}
+
+// The home timeline shows a reply together with the posts it answers, as one
+// conversation module whose items share an entry ID stem
+// ("home-conversation-<n>-tweet-<id>"). The stem, or nil outside a module.
+static NSString* ConversationModuleKey(id viewModel) {
+    NSString* entryID = ItemEntryID(viewModel);
+    if (![entryID containsString:@"conversation"]) {
+        return nil;
+    }
+
+    static NSRegularExpression* stem;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        stem = [NSRegularExpression regularExpressionWithPattern:@"^(.*?conversation[a-z]*-[0-9]+)"
+                                                         options:0
+                                                           error:nil];
+    });
+    NSTextCheckingResult* match = [stem firstMatchInString:entryID
+                                                   options:0
+                                                     range:NSMakeRange(0, entryID.length)];
+    if (!match || [match rangeAtIndex:1].location == NSNotFound) {
+        return nil;
+    }
+    return [entryID substringWithRange:[match rangeAtIndex:1]];
+}
+
+// Modules holding a hidden reply. The posts above it only came along to give
+// the reply its context, so the whole module goes.
+static NSSet<NSString*>* ConversationModulesWithHiddenReplies(NSArray* sections) {
+    NSMutableSet<NSString*>* modules = [NSMutableSet set];
+    for (id section in sections) {
+        if (![section isKindOfClass:[NSArray class]]) {
+            continue;
+        }
+        for (id item in (NSArray*)section) {
+            id viewModel = unwrapDataViewItem(item);
+            if (!ItemIsReplyToOthers(viewModel)) {
+                continue;
+            }
+            NSString* module = ConversationModuleKey(viewModel);
+            if (module) {
+                [modules addObject:module];
+            }
+        }
+    }
+    return modules;
+}
+
 // Everything the per-item filters need to know about one section update: which
 // hide toggles are on, which screen the timeline is being shown on, and the
 // conversation lookups those two imply. Adding a filter or a surface means
@@ -360,6 +436,8 @@ static BOOL ItemIsRetweet(id viewModel) {
 @property (nonatomic) BOOL hideRetweets;
 @property (nonatomic) BOOL hideBlockedRetweets;
 @property (nonatomic) BOOL hideNGWords;
+// Replies to other people, on the home timeline only.
+@property (nonatomic) BOOL hideReplies;
 // BHTNGWords.generation the verdicts were made with.
 @property (nonatomic) NSUInteger ngWordsGeneration;
 
@@ -544,6 +622,10 @@ static BOOL ShouldHideTimelineItem(id item, BHTimelineFilterContext* context) {
         return YES;
     }
 
+    if (context.hideReplies && ItemIsReplyToOthers(viewModel)) {
+        return YES;
+    }
+
     if (context.inNotifications) {
         return NO;
     }
@@ -715,6 +797,13 @@ static NSSet<NSNumber*>* ConversationAuthorRepliedToUserIDs(NSArray* sections,
     context.hideNGWords = BHTNGWords.active && !context.inProfile && !context.inEditHistory &&
                           !context.inNotifications;
     context.ngWordsGeneration = BHTNGWords.generation;
+    // Every tab of Home (For You, Following, pinned lists). A post opened
+    // from there is a conversation pushed on the navigation stack, outside
+    // the home container.
+    context.hideReplies =
+        [BHTSettings boolForKey:@"hide_followed_replies"] && !context.inConversation &&
+        IsInHierarchyOfClass(dataViewController,
+                             @"_TtC32TwitterHomeFeatureImplementation35HomeTimelineContainerViewController");
 
     return context;
 }
@@ -722,7 +811,7 @@ static NSSet<NSNumber*>* ConversationAuthorRepliedToUserIDs(NSArray* sections,
 - (BOOL)shouldFilter {
     return self.hideWhoToFollow || self.hidePrompts || self.hideVerified ||
            self.hideQuoteTweets || self.hideRetweets || self.hideBlockedRetweets ||
-           self.hideNGWords || self.inConversation;
+           self.hideNGWords || self.hideReplies || self.inConversation;
 }
 
 - (void)resolveConversationLookupsInSections:(NSArray*)sections {
@@ -751,6 +840,7 @@ static NSSet<NSNumber*>* ConversationAuthorRepliedToUserIDs(NSArray* sections,
            self.hideQuoteTweets == other.hideQuoteTweets &&
            self.hideRetweets == other.hideRetweets &&
            self.hideNGWords == other.hideNGWords &&
+           self.hideReplies == other.hideReplies &&
            self.ngWordsGeneration == other.ngWordsGeneration &&
            self.conversationRootUserID == other.conversationRootUserID &&
            self.inEditHistory == other.inEditHistory &&
@@ -770,6 +860,9 @@ static NSArray* FilteredTimelineSections(TFNItemsDataViewController* dataViewCon
 
     [context resolveConversationLookupsInSections:sections];
     NSCache<NSString*, NSNumber*>* verdicts = TimelineVerdictCacheForContext(context);
+    // Depends on the other items in this update, so it isn't memoized.
+    NSSet<NSString*>* hiddenModules =
+        context.hideReplies ? ConversationModulesWithHiddenReplies(sections) : nil;
 
     // Modules can share a section with unrelated items, so filtering is per item;
     // a purely filtered section (like the Discover More one) empties and is dropped.
@@ -786,6 +879,13 @@ static NSArray* FilteredTimelineSections(TFNItemsDataViewController* dataViewCon
         NSMutableIndexSet* removed = [NSMutableIndexSet indexSet];
 
         for (NSUInteger i = 0; i < items.count; i++) {
+            if (hiddenModules.count > 0) {
+                NSString* module = ConversationModuleKey(unwrapDataViewItem(items[i]));
+                if (module && [hiddenModules containsObject:module]) {
+                    [removed addIndex:i];
+                    continue;
+                }
+            }
             if (MemoizedShouldHideTimelineItem(items[i], verdicts, context)) {
                 [removed addIndex:i];
             }

@@ -4,6 +4,7 @@
 //
 
 #import "HookHelpers.h"
+#import "Core/BHTSidebarItems.h"
 
 // While set, -isSubscribedTo: (below) reports the account's genuine
 // subscription state instead of the forced premium tiers, so paths that need
@@ -856,11 +857,32 @@ BOOL panelIsGenuinelyAvailable(long long panelID) {
 
 static __thread BOOL DashPanelIDQuery = NO;
 
+// Panels NeoFreeBird always keeps out of the drawer, whatever the sidebar
+// editor says: the ones only unlocked for the tab pool, Premium for a
+// non-premium account, and Money, News and Calls.
+BOOL BHTSidebarPanelIsForcedHidden(long long panelID) {
+    switch (panelID) {
+        case 17: // Money
+        case 20: // News
+        case 25: // Calls
+            return YES;
+        case 15: // Premium
+            return !AccountIsGenuinelyPremium() || !panelIsGenuinelyAvailable(panelID);
+        case 13: // Community Notes
+        case 16: // Jobs
+            return !panelIsGenuinelyAvailable(panelID);
+        default:
+            return NO;
+    }
+}
+
 // [T1PanelIdentity iconImageNameForPanelID:] is where you can match panel IDs to their icons (aka names)
 static NSArray* panelIDsForDashSnapshot(NSArray* panelIDs) {
     if (!DashPanelIDQuery || !panelIDs) {
         return panelIDs;
     }
+
+    BHTSidebarItems.tabBarPanelIDs = panelIDs;
 
     NSMutableArray* spoofed = [panelIDs mutableCopy];
     void (^claim)(NSNumber*) = ^(NSNumber* panelID) {
@@ -869,29 +891,43 @@ static NSArray* panelIDsForDashSnapshot(NSArray* panelIDs) {
         }
     };
 
-    for (NSNumber* panelID in @[@13, @15, @16, @17]) {
-        if (!panelIsGenuinelyAvailable(panelID.longLongValue)) {
+    for (NSNumber* panelID in @[@13, @15, @16, @17, @20, @25]) {
+        if (BHTSidebarPanelIsForcedHidden(panelID.longLongValue)) {
             claim(panelID);
         }
     }
 
-    if ([BHTSettings boolForKey:@"hide_grok_sidebar"]) {
-        claim(@14);
+    // The sidebar editor's choices, Grok's ("Hide Grok in sidebar") included.
+    for (NSNumber* panelID in BHTSidebarItems.hiddenPanelIDs) {
+        claim(panelID);
     }
-
-    if (!AccountIsGenuinelyPremium()) {
-        claim(@15);
-    }
-    claim(@17); // Money
-    claim(@20); // News
-    claim(@25); // Calls
 
     return spoofed;
+}
+
+// Drawers that have taken a snapshot, so the editor can have them take a new
+// one.
+static NSHashTable* DashContentControllers(void) {
+    static NSHashTable* controllers;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        controllers = [NSHashTable weakObjectsHashTable];
+    });
+    return controllers;
+}
+
+void applySidebarItemsSetting(void) {
+    for (id controller in DashContentControllers().allObjects) {
+        if ([controller respondsToSelector:@selector(updateVisiblePanelIDs)]) {
+            ((void (*)(id, SEL))objc_msgSend)(controller, @selector(updateVisiblePanelIDs));
+        }
+    }
 }
 
 %hook T1DashContentController
 
 - (void)updateVisiblePanelIDs {
+    [DashContentControllers() addObject:self];
     BOOL saved = DashPanelIDQuery;
     DashPanelIDQuery = YES;
     @try {
@@ -1112,6 +1148,9 @@ static NSArray* panelIDsForDashSnapshot(NSArray* panelIDs) {
 static char SensitiveMediaRevealPendingKey;
 static char SensitiveMediaButtonHiddenKey;
 
+// Whether warnings were off at the last change of place; -1 until known.
+static int SensitiveWarningsWereSuppressed = -1;
+
 // Overlays that have been on screen, so a change of place (BHTSensitiveZones)
 // can blur or reveal the ones still showing.
 static NSHashTable<HFSensitiveTweetBlurredInterstitialView*>* SensitiveMediaOverlays(void) {
@@ -1200,6 +1239,9 @@ static void BHTScheduleSensitiveMediaReveal(HFSensitiveTweetBlurredInterstitialV
     %orig;
     if (self.window) {
         [SensitiveMediaOverlays() addObject:self];
+        if (SensitiveWarningsWereSuppressed < 0) {
+            SensitiveWarningsWereSuppressed = BHTSensitiveWarningsSuppressed() ? 1 : 0;
+        }
     }
     BHTUpdateSensitiveMediaRevealButton(self);
     BHTScheduleSensitiveMediaReveal(self);
@@ -1220,26 +1262,84 @@ static void BHTScheduleSensitiveMediaReveal(HFSensitiveTweetBlurredInterstitialV
 
 %end
 
-// Entering a registered place blurs media that was revealed automatically
-// (or by hand) and brings X's Show button back; leaving reveals it again.
-// Tweets laid out while warnings were off have no overlay at all, so those
-// only pick up a warning once they are shown again.
+// X remembers, for the session, every post whose sensitive media was shown
+// (by its Show button, which the automatic reveal above also goes through),
+// and opens those posts revealed wherever they appear again. One store per
+// account; tracked so it can be emptied.
+static NSHashTable* SensitiveRevealedContentStores(void) {
+    static NSHashTable* stores;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        stores = [NSHashTable weakObjectsHashTable];
+    });
+    return stores;
+}
+
+%hook T1StatusAttachmentSensitiveContentRevealedContentStore
+
+- (instancetype)init {
+    self = %orig;
+    if (self) {
+        [SensitiveRevealedContentStores() addObject:self];
+    }
+    return self;
+}
+
+%end
+
+static void BHTForgetRevealedSensitiveContent(void) {
+    for (id store in SensitiveRevealedContentStores().allObjects) {
+        NSMutableSet* revealed = nfb_objectIvar(store, "_revealedSet");
+        if ([revealed isKindOfClass:NSMutableSet.class]) {
+            [revealed removeAllObjects];
+        }
+    }
+}
+
+// Blurs one overlay again through its own Hide action, so the media and X's
+// bookkeeping follow; an overlay whose button was never built is set directly.
+static void BHTConcealSensitiveMedia(HFSensitiveTweetBlurredInterstitialView* overlay) {
+    if (![overlay respondsToSelector:@selector(blurViewIsHidden)] || !overlay.blurViewIsHidden) {
+        return;
+    }
+
+    UIButton* button = BHTSensitiveMediaRevealButton(overlay);
+    if (button && [overlay respondsToSelector:@selector(showOrHideMediaButtonPressed:)]) {
+        [overlay showOrHideMediaButtonPressed:button];
+    } else if ([overlay respondsToSelector:@selector(setBlurViewIsHidden:)]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(overlay, @selector(setBlurViewIsHidden:), NO);
+    }
+}
+
+// Entering a registered place resets every sensitive image to hidden: the
+// ones revealed automatically and the ones shown by hand, on screen or
+// scrolled away, and X's memory of them, so they come back blurred too. A
+// Show tapped after that is left alone. Leaving reveals them again. Tweets
+// laid out while warnings were off have no overlay at all, so those only pick
+// up a warning once they are shown again.
 static void BHTApplySensitiveZoneChange(void) {
     BOOL suppressed = BHTSensitiveWarningsSuppressed();
+    BOOL warningsCameBack = SensitiveWarningsWereSuppressed == 1 && !suppressed;
+    SensitiveWarningsWereSuppressed = suppressed ? 1 : 0;
+
+    if (warningsCameBack) {
+        BHTForgetRevealedSensitiveContent();
+    }
+
     for (HFSensitiveTweetBlurredInterstitialView* overlay in SensitiveMediaOverlays().allObjects) {
-        if (!overlay.window || ![overlay respondsToSelector:@selector(blurViewIsHidden)]) {
+        if (![overlay respondsToSelector:@selector(blurViewIsHidden)]) {
             continue;
         }
 
         if (suppressed) {
-            BHTScheduleSensitiveMediaReveal(overlay);
+            if (overlay.window) {
+                BHTScheduleSensitiveMediaReveal(overlay);
+            }
             continue;
         }
 
-        UIButton* button = BHTSensitiveMediaRevealButton(overlay);
-        if (overlay.blurViewIsHidden && button &&
-            [overlay respondsToSelector:@selector(showOrHideMediaButtonPressed:)]) {
-            [overlay showOrHideMediaButtonPressed:button];
+        if (warningsCameBack) {
+            BHTConcealSensitiveMedia(overlay);
         }
         BHTUpdateSensitiveMediaRevealButton(overlay);
     }

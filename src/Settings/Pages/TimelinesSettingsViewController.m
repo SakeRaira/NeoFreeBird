@@ -13,6 +13,7 @@
 #import "Settings/Pages/NGWordsViewController.h"
 
 extern void applyHideCustomTimelinesSetting(void);
+extern void applyHideForYouTabSetting(void);
 
 @implementation TimelinesSettingsViewController
 
@@ -74,6 +75,8 @@ extern void applyHideCustomTimelinesSetting(void);
     NSString* key = objc_getAssociatedObject(sender, @"prefKey");
     if ([key isEqualToString:@"hide_custom_timelines"]) {
         applyHideCustomTimelinesSetting();
+    } else if ([key isEqualToString:@"hide_for_you_tab"]) {
+        applyHideForYouTabSetting();
     }
 }
 

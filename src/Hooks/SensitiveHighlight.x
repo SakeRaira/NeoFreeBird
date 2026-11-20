@@ -164,12 +164,10 @@ static BHTSensitiveFlags FlagsForObject(id object) {
     return flags;
 }
 
-// Status views hold a view model that may be a TFNTwitterStatus or a Swift
-// adapter wrapping one (T1TwitterCoreStatusViewModelAdapter in 12.45), so
-// collect flags from the view model and everything it links to. Retweets are
-// wrappers, so the retweeted original counts; quoted tweets deliberately do
-// not.
-static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
+// The view model and everything it links to: it may be a TFNTwitterStatus or
+// a Swift adapter wrapping one (T1TwitterCoreStatusViewModelAdapter in
+// 12.45), sometimes two deep. Quoted tweets are deliberately not followed.
+static NSArray* ObjectsLinkedFrom(id root) {
     static NSArray<NSString*>* links;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -178,23 +176,63 @@ static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
     });
 
     NSHashTable* seen = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
-    NSMutableArray* queue = [NSMutableArray arrayWithObject:viewModel];
-    [seen addObject:viewModel];
+    NSMutableArray* queue = [NSMutableArray arrayWithObject:root];
+    [seen addObject:root];
 
-    BHTSensitiveFlags flags = 0;
     for (NSUInteger i = 0; i < queue.count && i < 16; i++) {
-        id object = queue[i];
-        flags |= FlagsForObject(object);
-
         for (NSString* name in links) {
-            id linked = ObjectForSelectorIfResponds(object, NSSelectorFromString(name));
+            id linked = ObjectForSelectorIfResponds(queue[i], NSSelectorFromString(name));
             if (linked && ![seen containsObject:linked]) {
                 [seen addObject:linked];
                 [queue addObject:linked];
             }
         }
     }
+    return queue;
+}
 
+// For a retweet, the post that was retweeted: the retweet itself is a
+// wrapper carrying the retweeter's own flag (set for their whole account when
+// it's restricted, for instance), which says nothing about the post shown.
+static id RetweetedOriginal(NSArray* objects) {
+    BOOL isRetweet = NO;
+    for (id object in objects) {
+        id original = ObjectForSelectorIfResponds(object, @selector(retweetedStatus));
+        if (original && original != object) {
+            return original;
+        }
+        isRetweet = isRetweet || BoolForSelectorIfResponds(object, @selector(isRetweet));
+    }
+    if (!isRetweet) {
+        return nil;
+    }
+
+    // Adapters answer representedStatus with the original's view model.
+    for (id object in objects) {
+        if (!BoolForSelectorIfResponds(object, @selector(isRetweet))) {
+            continue;
+        }
+        id represented = ObjectForSelectorIfResponds(object, @selector(representedStatus));
+        if (represented && represented != object) {
+            return represented;
+        }
+    }
+    return nil;
+}
+
+// Flags of the post a cell shows: for a retweet only the retweeted original
+// and what it links to, otherwise everything the view model links to.
+static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
+    NSArray* objects = ObjectsLinkedFrom(viewModel);
+    id original = RetweetedOriginal(objects);
+    if (original) {
+        objects = ObjectsLinkedFrom(original);
+    }
+
+    BHTSensitiveFlags flags = 0;
+    for (id object in objects) {
+        flags |= FlagsForObject(object);
+    }
     return flags;
 }
 

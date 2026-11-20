@@ -33,6 +33,9 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                     @{@"key": @"show_scroll_indicator",
                       @"default": @NO},
                     @{@"key": @"ipad_split_view",
+                      @"default": @YES},
+                    // Keeps X from reading the device's location (Location.x).
+                    @{@"key": @"block_x_location",
                       @"default": @YES}
                 ]
             },
@@ -53,6 +56,12 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                     @{
                         @"titleKey": @"CUSTOM_TAB_BAR_OPTION_TITLE",
                         @"action": @"showCustomTabBarVC:",
+                        @"type": @"button"
+                    },
+                    // Which panels the side drawer lists (BHTSidebarItems).
+                    @{
+                        @"titleKey": @"SIDEBAR_ITEMS_TITLE",
+                        @"action": @"showSidebarItems:",
                         @"type": @"button"
                     },
                     @{@"key": @"tab_bar_theming",
@@ -97,6 +106,10 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                       @"default": @NO},
                     @{@"key": @"hide_custom_timelines",
                       @"default": @NO},
+                    @{@"key": @"hide_for_you_tab",
+                      @"default": @YES},
+                    @{@"key": @"hide_followed_replies",
+                      @"default": @YES},
                     @{@"key": @"keep_timeline_filters",
                       @"default": @YES},
                     @{@"key": @"show_quote_numbers",
@@ -313,6 +326,11 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                 @"titleKey": @"MODERN_SETTINGS_CHAT_TITLE",
                 @"subtitleKey": @"MODERN_SETTINGS_CHAT_SUBTITLE",
                 @"settings": @[
+                    @{
+                        @"key": @"no_dm_read_receipts",
+                        @"default": @YES,
+                        @"type": @"toggle"
+                    },
                     @{
                         @"key": @"hide_typing_indicator",
                         @"default": @NO,

@@ -89,6 +89,9 @@
 "IPAD_SPLIT_VIEW_TITLE" = "iPadの分割表示を有効にする";	
 "IPAD_SPLIT_VIEW_DETAIL" = "iPad（およびiPhone Duo）でTwitterを分割表示で使用できるようになります。これにより、画面の片側でツイートを開いたまま、もう片側でタイムラインを表示しておくことができます。";
 
+"BLOCK_X_LOCATION_TITLE" = "Xに位置情報を使わせない";
+"BLOCK_X_LOCATION_DETAIL" = "アプリを開いている間にXが現在地を繰り返し取得し、検索や投稿への自動の位置情報付与などに使うのを止めます。近くの検索結果や、投稿への位置情報の追加は使えなくなります。「警告を表示する場所」はそのまま使えます。変更後はアプリを再起動してください。";
+
 "HIDE_TIMELINE_PROMPTS_TITLE" = "タイムラインの案内を非表示";
 "HIDE_TIMELINE_PROMPTS_DETAIL" = "「連絡先を追加」などの案内バナーを非表示にします。";
 "HIDE_VIDEOS_FOR_YOU_TITLE" = "「おすすめ動画」を非表示";
@@ -232,6 +235,9 @@
 "HIDE_TYPING_INDICATOR_TITLE" = "「入力中」を非表示";
 "HIDE_TYPING_INDICATOR_DETAIL" = "チャット相手に「入力中」のステータスを送信しないようにします。";
 
+"NO_DM_READ_RECEIPTS_TITLE" = "既読をつけない";
+"NO_DM_READ_RECEIPTS_DETAIL" = "チャットを読んでも、相手に既読が表示されないようにします。相手の既読は引き続き表示されます。読んだチャットは自分の側でも未読のまま残ります。";
+
 "DOWNLOAD_VOICE_MESSAGES_TITLE" = "ボイスメッセージをダウンロード";
 "DOWNLOAD_VOICE_MESSAGES_DETAIL" = "ボイスメッセージを再生した後にデバイスに保存します（音声を2本指で長押ししてダウンロードすることもできます）。";
 
@@ -331,6 +337,12 @@
 
 "CUSTOM_TAB_BAR_OPTION_TITLE" = "ナビゲーションバーを編集";
 
+"SIDEBAR_ITEMS_TITLE" = "サイドバーを編集";
+"SIDEBAR_ITEMS_HEADER" = "サイドバーに表示する項目";
+"SIDEBAR_ITEMS_FOOTER" = "ナビゲーションバーにある項目は、そこにある間はサイドバーに表示されません。並び順は変更できません。";
+"SIDEBAR_ITEMS_ON_TAB_BAR" = "ナビゲーションバーに表示中";
+"SIDEBAR_ITEMS_SHOW_ALL" = "すべて表示";
+
 /*Layout*/
 "HIDE_SPACES_TITLE" = "スペースを非表示";
 
@@ -341,6 +353,10 @@
 "HIDE_CUSTOM_TIMELINES_DETAIL" = "ホームタイムラインのタブから「追加」ボタンを削除します。";
 "KEEP_TIMELINE_FILTERS_TITLE" = "スヌーズを自動で解除しない";
 "KEEP_TIMELINE_FILTERS_DETAIL" = "おすすめタブでスヌーズ（絞り込み）したトピックが、24時間後に自動で解除されないようにします。変更後はアプリを再起動してください。";
+"HIDE_FOR_YOU_TAB_TITLE" = "おすすめタブを非表示";
+"HIDE_FOR_YOU_TAB_DETAIL" = "ホームのタブから「おすすめ」を消し、代わりに「フォロー中」を開きます。非表示の間、ホームのタブはスワイプではなくタップで切り替えます。";
+"HIDE_FOLLOWED_REPLIES_TITLE" = "ホームで返信を非表示";
+"HIDE_FOLLOWED_REPLIES_DETAIL" = "フォロー中のアカウントがほかの人に送った返信など、ほかの人宛ての返信を、一緒に表示される元の投稿ごとホームのタイムラインから非表示にします。スレッド（自分自身への返信）、あなたの返信、リツイートはそのまま表示されます。";
 
 "RESTORE_REFRESH_SOUNDS_TITLE" = "引っ張って更新のサウンド";
 

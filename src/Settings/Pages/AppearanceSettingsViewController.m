@@ -11,6 +11,7 @@
 #import "Headers/Helpers.h"
 #import "Headers/TWHeaders.h"
 #import "Settings/ModernSettingsCells.h"
+#import "Settings/Pages/SidebarItemsViewController.h"
 
 @interface AppearanceSettingsViewController () <UIFontPickerViewControllerDelegate>
 @end
@@ -111,6 +112,11 @@
                                                 handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
     }
+}
+
+- (void)showSidebarItems:(NSDictionary*)sender {
+    SidebarItemsViewController* items = [[SidebarItemsViewController alloc] initWithAccount:self.account];
+    [self.navigationController pushViewController:items animated:YES];
 }
 
 #pragma mark - Tab Bar Refresh

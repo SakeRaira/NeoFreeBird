@@ -89,6 +89,9 @@
 "IPAD_SPLIT_VIEW_TITLE" = "Enable iPad split view";
 "IPAD_SPLIT_VIEW_DETAIL" = "Allows you to use Twitter in split view on iPad (and the iPhone Duo). This allows you to have a tweet open on one side and your timeline on the other.";
 
+"BLOCK_X_LOCATION_TITLE" = "Don't let X use your location";
+"BLOCK_X_LOCATION_DETAIL" = "Stops X from fetching where you are while it's open, which it otherwise does over and over for search, automatic location tags and more. Results near you and adding a location to posts stop working. \"Show warnings at places\" keeps working. Restart the app after changing this.";
+
 "HIDE_TIMELINE_PROMPTS_TITLE" = "No timeline prompts";
 "HIDE_TIMELINE_PROMPTS_DETAIL" = "Remove banners like 'Add contacts'.";
 "HIDE_VIDEOS_FOR_YOU_TITLE" = "Hide 'Videos for you'";
@@ -232,6 +235,9 @@
 "HIDE_TYPING_INDICATOR_TITLE" = "Hide typing indicator";
 "HIDE_TYPING_INDICATOR_DETAIL" = "Stop sending the \"typing...\" indicator to other people in chats.";
 
+"NO_DM_READ_RECEIPTS_TITLE" = "Don't send read receipts";
+"NO_DM_READ_RECEIPTS_DETAIL" = "Reading a chat no longer tells the other person you've seen it. Their read receipts still show. Chats you read stay marked unread on your side too.";
+
 "DOWNLOAD_VOICE_MESSAGES_TITLE" = "Download voice messages";
 "DOWNLOAD_VOICE_MESSAGES_DETAIL" = "Save voice messages to your device after playing them (long-press on an audio message with 2 fingers to download it).";
 
@@ -331,6 +337,12 @@
 
 "CUSTOM_TAB_BAR_OPTION_TITLE" = "Edit navigation bar";
 
+"SIDEBAR_ITEMS_TITLE" = "Edit sidebar";
+"SIDEBAR_ITEMS_HEADER" = "Shown in the sidebar";
+"SIDEBAR_ITEMS_FOOTER" = "Items on the navigation bar aren't listed in the sidebar while they're there. The order can't be changed.";
+"SIDEBAR_ITEMS_ON_TAB_BAR" = "On the navigation bar";
+"SIDEBAR_ITEMS_SHOW_ALL" = "Show all";
+
 /*Layout*/
 "HIDE_SPACES_TITLE" = "Hide the Spaces bar";
 
@@ -341,6 +353,10 @@
 "HIDE_CUSTOM_TIMELINES_DETAIL" = "Remove the Add button from the home timeline tabs.";
 "KEEP_TIMELINE_FILTERS_TITLE" = "Keep topic snoozes on";
 "KEEP_TIMELINE_FILTERS_DETAIL" = "Topics snoozed or filtered from the For You tab stay that way instead of switching off after 24 hours. Restart the app after changing this.";
+"HIDE_FOR_YOU_TAB_TITLE" = "Hide the For You tab";
+"HIDE_FOR_YOU_TAB_DETAIL" = "Takes For You off the Home tabs and opens Following instead. While it's hidden, Home tabs switch by tapping, not by swiping.";
+"HIDE_FOLLOWED_REPLIES_TITLE" = "Hide replies on Home";
+"HIDE_FOLLOWED_REPLIES_DETAIL" = "Hides replies to other people from the Home timeline, such as the ones accounts you follow send, together with the posts shown above them. Threads, your own replies and retweets stay.";
 
 "RESTORE_REFRESH_SOUNDS_TITLE" = "Pull-to-refresh sounds";
 
