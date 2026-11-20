@@ -122,6 +122,20 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"prefKeyForSubtitle": @"ng_words_summary",
                         @"subtitleDefaultKey": @"GENERIC_OFF_LABEL"
                     },
+                    // Log of Tweets seen, shown under History (BHTTweetLog).
+                    @{@"key": @"tweet_log_enabled",
+                      @"default": @YES},
+                    @{@"key": @"tweet_log_all_screens",
+                      @"parentKey": @"tweet_log_enabled",
+                      @"default": @NO},
+                    @{
+                        @"type": @"compactButton",
+                        @"key": @"tweet_log_limit",
+                        @"parentKey": @"tweet_log_enabled",
+                        @"default": @500,
+                        @"titleKey": @"TWEET_LOG_LIMIT_TITLE",
+                        @"action": @"showTweetLogLimitPicker:"
+                    },
                     @{@"key": @"restore_refresh_sounds",
                       @"default": @YES}
                 ]

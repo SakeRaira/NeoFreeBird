@@ -86,6 +86,14 @@ BOOL isCookieLoginUserID(NSString* userID);
 // requests such as restoring tweet source labels (WebCreateTweet.x)
 NSDictionary* currentWebCredentials(void);
 
+// Zero-argument getters called only when the receiver really implements them
+// (not forwarded) with the expected return type, for probing X's view models,
+// whose shapes vary between classes and versions. nil / NO / 0 otherwise.
+id BHTSafeObject(id object, SEL selector);
+BOOL BHTSafeBool(id object, SEL selector);
+long long BHTSafeLongLong(id object, SEL selector);
+NSString* BHTSafeString(id object, SEL selector);
+
 BOOL nfb_boolIvar(id object, const char* name, BOOL fallback);
 
 void nfb_setBoolIvar(id object, const char* name, BOOL value);

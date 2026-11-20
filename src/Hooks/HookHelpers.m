@@ -161,6 +161,50 @@ bool NFBLiquidGlassEnabled(void) {
     return [BHTSettings boolForKey:@"liquid_glass"];
 }
 
+static char SafeReturnType(id object, SEL selector) {
+    if (!object) {
+        return 0;
+    }
+    Method method = class_getInstanceMethod(object_getClass(object), selector);
+    const char* encoding = method ? method_getTypeEncoding(method) : NULL;
+    return encoding ? encoding[0] : 0;
+}
+
+id BHTSafeObject(id object, SEL selector) {
+    if (SafeReturnType(object, selector) != '@') {
+        return nil;
+    }
+    return ((id (*)(id, SEL))objc_msgSend)(object, selector);
+}
+
+BOOL BHTSafeBool(id object, SEL selector) {
+    char type = SafeReturnType(object, selector);
+    if (type != 'B' && type != 'c') {
+        return NO;
+    }
+    return ((BOOL (*)(id, SEL))objc_msgSend)(object, selector);
+}
+
+long long BHTSafeLongLong(id object, SEL selector) {
+    switch (SafeReturnType(object, selector)) {
+        case 'q':
+        case 'Q':
+        case 'l':
+        case 'L':
+            return ((long long (*)(id, SEL))objc_msgSend)(object, selector);
+        case 'i':
+        case 'I':
+            return ((int (*)(id, SEL))objc_msgSend)(object, selector);
+        default:
+            return 0;
+    }
+}
+
+NSString* BHTSafeString(id object, SEL selector) {
+    id value = BHTSafeObject(object, selector);
+    return [value isKindOfClass:NSString.class] ? value : nil;
+}
+
 BOOL nfb_boolIvar(id object, const char* name, BOOL fallback) {
     Ivar ivar = class_getInstanceVariable(object_getClass(object), name);
     if (!ivar) {

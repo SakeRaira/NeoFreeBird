@@ -449,6 +449,24 @@
 "NG_WORDS_INVALID_REGEX" = "That regular expression isn't valid.";
 "NG_WORDS_EMPTY_AFTER_NORMALIZE" = "A word made only of spaces or symbols would hide every Tweet.";
 "NG_WORDS_DUPLICATE" = "That word is already on the list.";
+"TWEET_LOG_ENABLED_TITLE" = "Log Tweets you've seen";
+"TWEET_LOG_ENABLED_DETAIL" = "Keeps the Tweets shown in your home timeline and lists them in a \"Seen\" tab under History in the side menu. The log stays on this device.";
+"TWEET_LOG_ALL_SCREENS_TITLE" = "Log other screens too";
+"TWEET_LOG_ALL_SCREENS_DETAIL" = "Also logs Tweets shown in search, profiles, lists and replies.";
+"TWEET_LOG_LIMIT_TITLE" = "Tweets to keep";
+"TWEET_LOG_LIMIT_MESSAGE" = "The oldest ones are dropped past this.";
+"TWEET_LOG_LIMIT_FORMAT" = "%ld Tweets";
+"TWEET_LOG_TAB_TITLE" = "Seen";
+"TWEET_LOG_COUNT_FORMAT" = "%1$ld of %2$ld Tweets";
+"TWEET_LOG_CLEAR" = "Clear all";
+"TWEET_LOG_CLEAR_CONFIRM_TITLE" = "Clear the whole log?";
+"TWEET_LOG_CLEAR_CONFIRM_MESSAGE" = "This can't be undone.";
+"TWEET_LOG_EMPTY" = "Nothing logged yet. Tweets shown in your home timeline will show up here.";
+"TWEET_LOG_RETWEETED_BY" = "%@ Retweeted";
+"TWEET_LOG_SEEN_FORMAT" = "Seen %@";
+"TWEET_LOG_OPEN" = "Open Tweet";
+"TWEET_LOG_COPY_LINK" = "Copy link";
+"TWEET_LOG_REMOVE" = "Remove from log";
 
 "HIDE_TWEET_BUTTON_TITLE" = "Hide Tweet button";
 "HIDE_TWEET_BUTTON_DETAIL" = "Removes the Tweet button from the navigation bar.";
