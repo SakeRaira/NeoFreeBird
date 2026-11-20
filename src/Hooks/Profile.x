@@ -142,6 +142,97 @@ static void PresentCopyProfileInfoSheet(T1ProfileUserViewModel* viewModel) {
 
 %end
 
+// MARK: - Open the Media tab on Photos
+
+// The Media tab is a group of Videos and Photos inner tabs that opens on
+// Videos. Point the group at Photos once per active-index array: X builds a new
+// array when it rebuilds the groups, and a tap by the user only changes the
+// existing one in place, which is left alone after the first adjustment.
+static const void* PhotosFirstAppliedKey = &PhotosFirstAppliedKey;
+// Set on a profile's providers when X opens its Videos tab on purpose (the
+// immersive player's link to a profile's videos), which the default must not
+// undo.
+static const void* VideosRequestedKey = &VideosRequestedKey;
+
+static void SelectPhotosInMediaGroup(T1ProfileDisplayNormalMainContentProvider* provider,
+                                     NSArray* entries) {
+    if (![BHTSettings boolForKey:@"profile_media_photos_first"] ||
+        objc_getAssociatedObject(provider, VideosRequestedKey) ||
+        ![entries isKindOfClass:NSArray.class] ||
+        ![provider respondsToSelector:@selector(groupActiveIndices)] ||
+        ![provider respondsToSelector:@selector(photoEntry)] ||
+        ![provider respondsToSelector:@selector(videoEntry)]) {
+        return;
+    }
+
+    NSMutableArray* activeIndices = provider.groupActiveIndices;
+    if (![activeIndices isKindOfClass:NSMutableArray.class] ||
+        objc_getAssociatedObject(activeIndices, PhotosFirstAppliedKey)) {
+        return;
+    }
+
+    id photoEntry = provider.photoEntry;
+    id videoEntry = provider.videoEntry;
+    if (!photoEntry) {
+        return;
+    }
+
+    NSUInteger groupCount = 0;
+    for (id entry in entries) {
+        if ([entry isKindOfClass:NSArray.class]) {
+            groupCount++;
+        }
+    }
+
+    NSUInteger groupOrdinal = 0;
+    for (NSUInteger tabIndex = 0; tabIndex < entries.count; tabIndex++) {
+        NSArray* group = entries[tabIndex];
+        if (![group isKindOfClass:NSArray.class]) {
+            continue;
+        }
+
+        NSUInteger photoIndex = [group indexOfObjectIdenticalTo:photoEntry];
+        if (photoIndex == NSNotFound) {
+            groupOrdinal++;
+            continue;
+        }
+
+        // videoEntry may be built on demand instead of kept, in which case it
+        // is never the instance in the group; the Media group's other tab is.
+        NSUInteger videoIndex = videoEntry ? [group indexOfObjectIdenticalTo:videoEntry] : NSNotFound;
+        if (videoIndex == NSNotFound && group.count == 2) {
+            videoIndex = 1 - photoIndex;
+        }
+        if (videoIndex == NSNotFound) {
+            return;
+        }
+
+        // One slot per outer tab, or one per group. Anything else (including
+        // an array X hasn't filled yet) is left for a later call.
+        NSUInteger slot;
+        if (activeIndices.count == entries.count) {
+            slot = tabIndex;
+        } else if (activeIndices.count == groupCount) {
+            slot = groupOrdinal;
+        } else {
+            return;
+        }
+
+        id current = activeIndices[slot];
+        if ([current isKindOfClass:NSNumber.class] &&
+            [current integerValue] == (NSInteger)videoIndex) {
+            @try {
+                activeIndices[slot] = @(photoIndex);
+            } @catch (__unused NSException* exception) {
+                // An immutable array behind the mutable type; leave it.
+            }
+        }
+        objc_setAssociatedObject(activeIndices, PhotosFirstAppliedKey, @YES,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        return;
+    }
+}
+
 // MARK: - Show unrounded tweet/post count
 
 %hook T1ProfileDisplayNormalMainContentProvider
@@ -173,6 +264,30 @@ static void PresentCopyProfileInfoSheet(T1ProfileUserViewModel* viewModel) {
     }
 
     return [(NSString*)original stringByReplacingCharactersInRange:range withString:fullCount];
+}
+
+// Media tab default, see SelectPhotosInMediaGroup().
+- (NSArray*)contentMainEntries {
+    NSArray* entries = %orig;
+    SelectPhotosInMediaGroup(self, entries);
+    return entries;
+}
+
+%end
+
+%hook T1ProfileViewController
+
+- (void)showProfileVideosTabWithPersist:(BOOL)persist {
+    NSArray* providers = [self respondsToSelector:@selector(displayContentProviders)]
+                             ? self.displayContentProviders
+                             : nil;
+    if ([providers isKindOfClass:NSArray.class]) {
+        for (id provider in providers) {
+            objc_setAssociatedObject(provider, VideosRequestedKey, @YES,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+    %orig;
 }
 
 %end

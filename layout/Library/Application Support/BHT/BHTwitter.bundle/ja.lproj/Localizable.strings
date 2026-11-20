@@ -223,6 +223,8 @@
 
 "SHOW_UNROUNDED_COUNTS_TITLE" = "正確な数値を表示";
 "SHOW_UNROUNDED_COUNTS_DETAIL" = "フォロワー数、フォロー数、ポスト数を千や百万単位に丸めず、正確な数値で表示します。";
+"PROFILE_MEDIA_PHOTOS_FIRST_TITLE" = "メディア欄を画像から表示";
+"PROFILE_MEDIA_PHOTOS_FIRST_DETAIL" = "プロフィールのメディア欄を開いたときに、動画ではなく画像を最初に表示します。";
 
 /*Search*/
 "NO_HISTORY_TITLE" = "検索履歴を残さない";
@@ -291,6 +293,8 @@
 
 "HIDE_CUSTOM_TIMELINES_TITLE" = "カスタムタイムラインを非表示";
 "HIDE_CUSTOM_TIMELINES_DETAIL" = "ホームタイムラインのタブから「追加」ボタンを削除します。";
+"KEEP_TIMELINE_FILTERS_TITLE" = "スヌーズを自動で解除しない";
+"KEEP_TIMELINE_FILTERS_DETAIL" = "おすすめタブでスヌーズ（絞り込み）したトピックが、24時間後に自動で解除されないようにします。変更後はアプリを再起動してください。";
 
 "RESTORE_REFRESH_SOUNDS_TITLE" = "引っ張って更新のサウンド";
 

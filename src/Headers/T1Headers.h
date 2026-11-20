@@ -160,10 +160,23 @@
 - (id)profileMoreActionsBaseActionItemsWithSender:(id)sender;
 @end
 
-// Hooked for unrounded tweet/post count
+// Hooked for unrounded tweet/post count and the Media tab's default sub-tab
 @interface T1ProfileDisplayNormalMainContentProvider : NSObject
 @property (retain, nonatomic) T1ProfileUserViewModel* viewModel;
+// Outer tabs in order; a tab with inner tabs (Media: Videos, Photos) is an
+// array of its entries.
+@property (readonly, nonatomic) NSArray* contentMainEntries;
+// The selected inner tab of each tab group.
+@property (retain, nonatomic) NSMutableArray* groupActiveIndices;
+@property (retain, nonatomic) id photoEntry;
+@property (readonly, nonatomic) id videoEntry;
 - (id)_tweetsSubtitle;
+@end
+
+// Hooked so an explicit jump to the Videos tab beats the photos default
+@interface T1ProfileViewController : UIViewController
+@property (retain, nonatomic) NSArray* displayContentProviders;
+- (void)showProfileVideosTabWithPersist:(BOOL)persist;
 @end
 
 #pragma mark - Status views

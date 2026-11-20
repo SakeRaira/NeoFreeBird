@@ -61,6 +61,14 @@ static NSNumber* FeatureSwitchOverrideValueForKey(NSString* key) {
         return @NO;
     }
 
+    // How long a topic snooze (or topic/country filter) on the For You tab
+    // stays on before switching itself off; 1440 minutes server-side.
+    if ([key isEqualToString:@"co_timeline_reset_period_minutes"]) {
+        return [BHTSettings boolForKey:@"keep_timeline_filters"]
+                   ? @(BHTTimelineFilterNeverResetMinutes)
+                   : nil;
+    }
+
     if ([key isEqualToString:@"hometimeline_pinned_tabs_limit"] ||
         [key isEqualToString:@"hometimeline_pinned_tabs_management_pinnedsection_"
                              @"inline_limit"] ||

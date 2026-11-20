@@ -45,6 +45,11 @@ void applySquareAvatarsSetting(void);
 // Live restyling of sensitive tweet highlights (SensitiveHighlight.x)
 void applySensitiveHighlightSetting(void);
 
+// Reset period used to keep For You topic snoozes and filters on: ten years,
+// long enough never to elapse while minutes * 60 still fits in 32 bits for
+// any code that narrows it (FeatureSwitches.x, TimelineFilters.x).
+static const NSInteger BHTTimelineFilterNeverResetMinutes = 10 * 365 * 24 * 60;
+
 NSString* formatNumberWithSuffix(long long number);
 
 bool NFBLiquidGlassEnabled(void);

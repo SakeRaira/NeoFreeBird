@@ -97,6 +97,8 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                       @"default": @NO},
                     @{@"key": @"hide_custom_timelines",
                       @"default": @NO},
+                    @{@"key": @"keep_timeline_filters",
+                      @"default": @YES},
                     @{@"key": @"show_quote_numbers",
                       @"default": @NO},
                     @{@"key": @"show_unrounded_quote_numbers",
@@ -253,6 +255,11 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                     @{
                         @"key": @"show_unrounded_counts",
                         @"default": @NO,
+                        @"type": @"toggle"
+                    },
+                    @{
+                        @"key": @"profile_media_photos_first",
+                        @"default": @YES,
                         @"type": @"toggle"
                     },
                     @{
