@@ -1123,6 +1123,37 @@ void applySidebarItemsSetting(void) {
 
 %end
 
+// The full-screen "This account may contain sensitive content" notice on a
+// profile is its own content provider, shown in place of the profile's
+// timelines. X steps it aside ("supersedes" it) when the viewer allows
+// sensitive media; with warnings off the sensitive-media kinds go that way
+// too. Other kinds (suspended, withheld, ...) are untouched.
+static BOOL ProfileInterstitialIsSuppressedSensitive(id provider) {
+    if (!BHTSensitiveWarningsSuppressed()) {
+        return NO;
+    }
+
+    id viewModel = BHTSafeObject(provider, @selector(viewModel));
+    long long type = BHTSafeLongLong(viewModel, @selector(interstitialType));
+    SEL isSensitiveType = @selector(private_isSensitiveMediaInterstitialType:);
+    if (!viewModel || ![provider respondsToSelector:isSensitiveType]) {
+        return NO;
+    }
+    return ((BOOL (*)(id, SEL, long long))objc_msgSend)(provider, isSensitiveType, type);
+}
+
+%hook T1ProfileDisplayInterstitialedUserContentProvider
+
+- (BOOL)private_shouldInterstitialBeSuperceded {
+    return ProfileInterstitialIsSuppressedSensitive(self) ? YES : %orig;
+}
+
+- (BOOL)canBecomeCurrent {
+    return ProfileInterstitialIsSuppressedSensitive(self) ? NO : %orig;
+}
+
+%end
+
 %hook HFHealthSafetyFeature
 
 + (BOOL)isTweetMedialInterstitialEnabled:(id)featureSwitches {
