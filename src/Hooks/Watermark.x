@@ -103,6 +103,29 @@ static BOOL IsAppWindow(UIWindow* window) {
            ![name containsString:@"Remote"];
 }
 
+// X's own blurs (XDSBlur: the profile banner's as it scrolls, and others)
+// blur what's behind them through a filter and tint it with their own
+// views. Changing those views breaks the blur into blocks, so nothing inside
+// one is ever touched. (UIKit's effect views are handled through their
+// content view instead.)
+static BOOL IsCustomBlur(UIView* view) {
+    return ![view isKindOfClass:UIVisualEffectView.class] && [NSStringFromClass(view.class) containsString:@"Blur"];
+}
+
+static BOOL IsInsideCustomBlur(UIView* view) {
+    for (UIView* ancestor = view; ancestor; ancestor = ancestor.superview) {
+        if (IsCustomBlur(ancestor)) {
+            return YES;
+        }
+        if ([ancestor isKindOfClass:UIVisualEffectView.class] && view != ancestor &&
+            ![view isDescendantOfView:((UIVisualEffectView*)ancestor).contentView]) {
+            // An effect view's own layers (its tint), not its content.
+            return YES;
+        }
+    }
+    return NO;
+}
+
 // MARK: - Theme background
 
 // X's palette (TAEColorSettings → the current TAEColorPalette) hands out its
@@ -264,6 +287,9 @@ static void ClearThemeBackgroundsInside(UIView* root) {
     NSMutableArray<UIView*>* queue = [root.subviews mutableCopy] ?: [NSMutableArray array];
     for (NSUInteger i = 0; i < queue.count && i < 150; i++) {
         UIView* view = queue[i];
+        if (IsCustomBlur(view)) {
+            continue;
+        }
         ClearThemeBackground(view);
         if ([view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class] ||
             [view isKindOfClass:UIScrollView.class] || [view isKindOfClass:UITextView.class]) {
@@ -422,7 +448,7 @@ static BOOL ViewDrawsItself(UIView* view) {
 static BOOL CanPaint(UIView* view, CGFloat minAlpha) {
     if ([view isKindOfClass:UIScrollView.class] || [view isKindOfClass:UILabel.class] ||
         [view isKindOfClass:UITextView.class] || [view isKindOfClass:UIVisualEffectView.class] ||
-        [view isKindOfClass:BHTWallpaperView.class]) {
+        [view isKindOfClass:BHTWallpaperView.class] || IsCustomBlur(view)) {
         return NO;
     }
     if ([view isKindOfClass:UIImageView.class] && ((UIImageView*)view).image) {
@@ -758,7 +784,7 @@ static void PaintStrip(UIView* strip, BOOL inside) {
     NSMutableArray<UIView*>* queue = [strip.subviews mutableCopy];
     for (NSUInteger i = 0; i < queue.count && i < 80; i++) {
         UIView* view = queue[i];
-        if ([view isKindOfClass:BHTWallpaperView.class]) {
+        if ([view isKindOfClass:BHTWallpaperView.class] || IsCustomBlur(view)) {
             continue;
         }
         if (backed) {
@@ -818,7 +844,8 @@ static NSArray<UIView*>* StripsIn(UIView* root, NSUInteger limit) {
             continue;
         }
         if (IsList(view) || [view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class] ||
-            [view isKindOfClass:UITextView.class] || [view isKindOfClass:BHTWallpaperView.class]) {
+            [view isKindOfClass:UITextView.class] || [view isKindOfClass:BHTWallpaperView.class] ||
+            IsCustomBlur(view)) {
             continue;
         }
         [queue addObjectsFromArray:view.subviews];
@@ -919,7 +946,7 @@ static BOOL ClearSubtree(UIView* root, NSUInteger limit) {
     for (NSUInteger i = 0; i < queue.count && i < limit; i++) {
         UIView* view = queue[i];
         if ([view isKindOfClass:BHTWallpaperView.class] || [view isKindOfClass:UINavigationBar.class] ||
-            [tabBarViews containsObject:view]) {
+            [tabBarViews containsObject:view] || IsCustomBlur(view)) {
             continue;
         }
         [visited addObject:view];
@@ -1112,7 +1139,6 @@ static void ClearAllScreens(void) {
 }
 
 static void ScheduleSettlePass(UIViewController* controller);
-static void RecoverFadedScreen(UIViewController* controller);
 static void ProcessThemedViews(BOOL beforeDrawing);
 
 %hook UIViewController
@@ -1128,7 +1154,6 @@ static void ProcessThemedViews(BOOL beforeDrawing);
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    RecoverFadedScreen(self);
     if (FullOn) {
         ClearController(self, YES);
         ScheduleSettlePass(self);
@@ -1198,13 +1223,22 @@ static void ProcessThemedViews(BOOL beforeDrawing);
 // in fades in. UIKit runs the fades with the slide, so an interactive swipe
 // back fades with the finger, and a cancelled one fades back.
 
-// A screen's own alpha while it fades, put back when the transition ends.
+// Views fading and the navigation controllers moving them; whatever the
+// transitions report, every fade is undone once none of them is moving
+// (checked before each frame).
+static NSHashTable* FadingViewsStorage;
+static NSHashTable* FadingNavigationsStorage;
+// UIKit's shade views hidden during transitions.
+static NSHashTable* HiddenShadesStorage;
+
+// A view's own alpha while it fades, put back when the transition ends.
 static void RestoreFade(UIView* view) {
     NSNumber* original = objc_getAssociatedObject(view, FadeAlphaKey);
     if (!original) {
         return;
     }
     objc_setAssociatedObject(view, FadeAlphaKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [WeakSet(&FadingViewsStorage) removeObject:view];
     [UIView performWithoutAnimation:^{
         view.alpha = original.doubleValue;
     }];
@@ -1213,7 +1247,9 @@ static void RestoreFade(UIView* view) {
 // UIKit darkens the screen underneath while another slides over it, and
 // shades the moving screen's edge. Over clear screens that shows as a dark
 // veil on the wallpaper, so those views (which only live for the
-// transition) are hidden. The screens themselves are never touched.
+// transition) are hidden. Only empty plain views are ever hidden: the
+// screens, their wrappers and snapshots never are, even before UIKit has
+// put the screen inside them.
 static BOOL IsDarkShade(UIView* view) {
     UIColor* color = view.backgroundColor;
     if (!color) {
@@ -1230,7 +1266,22 @@ static BOOL IsDarkShade(UIView* view) {
     return alpha > 0 && red < 0.2 && green < 0.2 && blue < 0.2;
 }
 
-static void HideTransitionDimming(UIView* container, UIView* fromView, UIView* toView) {
+static BOOL IsTransitionShade(UIView* view) {
+    if (view.subviews.count > 0 || view.hidden) {
+        return NO;
+    }
+    Class viewClass = view.class;
+    if (viewClass != UIView.class && viewClass != UIImageView.class) {
+        return NO;
+    }
+    if ([NSStringFromClass(view.superview.class) containsString:@"Dimming"]) {
+        return YES;
+    }
+    return viewClass == UIView.class && IsDarkShade(view);
+}
+
+static NSArray<UIView*>* HideTransitionDimming(UIView* container, UIView* fromView, UIView* toView) {
+    NSMutableArray<UIView*>* hidden = [NSMutableArray array];
     NSMutableArray<UIView*>* queue = [container.subviews mutableCopy] ?: [NSMutableArray array];
     for (NSUInteger i = 0; i < queue.count && i < 40; i++) {
         UIView* view = queue[i];
@@ -1238,43 +1289,84 @@ static void HideTransitionDimming(UIView* container, UIView* fromView, UIView* t
             [view.nextResponder isKindOfClass:UIViewController.class]) {
             continue;
         }
-        NSString* name = NSStringFromClass(view.class);
-        BOOL shading = [name containsString:@"Dimming"] || [name containsString:@"Shadow"];
-        BOOL holdsScreen = (fromView && [fromView isDescendantOfView:view]) || (toView && [toView isDescendantOfView:view]);
-        if (holdsScreen) {
+        if (view.subviews.count > 0) {
             // UIKit's dimming view wraps the screen: its shade is beside it.
-            [queue addObjectsFromArray:view.subviews];
+            BOOL holdsScreen = (fromView && [fromView isDescendantOfView:view]) ||
+                               (toView && [toView isDescendantOfView:view]);
+            if (holdsScreen || [NSStringFromClass(view.class) containsString:@"Dimming"]) {
+                [queue addObjectsFromArray:view.subviews];
+            }
             continue;
         }
-        BOOL insideShading = [NSStringFromClass(view.superview.class) containsString:@"Dimming"];
-        if (shading || insideShading || (view.subviews.count == 0 && IsDarkShade(view))) {
+        if (IsTransitionShade(view)) {
             view.hidden = YES;
+            [hidden addObject:view];
+            [WeakSet(&HiddenShadesStorage) addObject:view];
         }
+    }
+    return hidden;
+}
+
+static void ShowShades(NSArray<UIView*>* shades) {
+    for (UIView* shade in shades) {
+        shade.hidden = NO;
+        [WeakSet(&HiddenShadesStorage) removeObject:shade];
     }
 }
 
 // Fades `view` in (from clear) or out alongside the transition, once per
-// transition even when several pop calls report the same one.
-static void FadeAlongside(id<UIViewControllerTransitionCoordinator> coordinator, UIView* view, BOOL fadeIn,
+// transition even when several pop calls report the same one. The start is
+// set again when the animation starts, in case X put the view back in the
+// meantime.
+static void FadeAlongside(UINavigationController* navigationController,
+                          id<UIViewControllerTransitionCoordinator> coordinator, UIView* view, BOOL fadeIn,
                           UIView* fromView, UIView* toView) {
     if (!view || objc_getAssociatedObject(view, FadeAlphaKey)) {
         return;
     }
     CGFloat original = view.alpha;
+    // A view X keeps hidden this way is left to X.
+    if (original < 0.01) {
+        return;
+    }
     objc_setAssociatedObject(view, FadeAlphaKey, @(original), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [WeakSet(&FadingViewsStorage) addObject:view];
+    [WeakSet(&FadingNavigationsStorage) addObject:navigationController];
     if (fadeIn) {
         [UIView performWithoutAnimation:^{
             view.alpha = 0;
         }];
     }
+    __block NSArray<UIView*>* shades = nil;
     [coordinator
         animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
-            HideTransitionDimming(context.containerView, fromView, toView);
+            shades = HideTransitionDimming(context.containerView, fromView, toView);
+            if (fadeIn) {
+                [UIView performWithoutAnimation:^{
+                    view.alpha = 0;
+                }];
+            }
             view.alpha = fadeIn ? original : 0;
         }
         completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+            ShowShades(shades);
             RestoreFade(view);
         }];
+}
+
+// The strip X shows in the header for a screen (Following/For you...): it
+// belongs to the screen, so it fades with it.
+static UIView* HeaderAccessoryOf(UIViewController* controller) {
+    SEL getter = @selector(tfn_navigationBarAccessoryView);
+    NSMutableArray<UIViewController*>* queue = [NSMutableArray arrayWithObject:controller];
+    for (NSUInteger i = 0; i < queue.count && i < 8; i++) {
+        UIView* accessory = BHTSafeObject(queue[i], getter);
+        if ([accessory isKindOfClass:UIView.class]) {
+            return accessory;
+        }
+        [queue addObjectsFromArray:queue[i].childViewControllers];
+    }
+    return nil;
 }
 
 static void CrossFadeScreens(UINavigationController* navigationController) {
@@ -1285,33 +1377,53 @@ static void CrossFadeScreens(UINavigationController* navigationController) {
     if (!coordinator || !coordinator.isAnimated) {
         return;
     }
-    UIView* fromView = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey].viewIfLoaded;
-    UIView* toView = [coordinator viewControllerForKey:UITransitionContextToViewControllerKey].viewIfLoaded;
+    UIViewController* from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
+    UIViewController* to = [coordinator viewControllerForKey:UITransitionContextToViewControllerKey];
+    UIView* fromView = from.viewIfLoaded;
+    UIView* toView = to.viewIfLoaded;
     if (!fromView || !IsAppWindow(fromView.window)) {
         return;
     }
-    FadeAlongside(coordinator, fromView, NO, fromView, toView);
+    FadeAlongside(navigationController, coordinator, fromView, NO, fromView, toView);
     if (toView && toView != fromView) {
-        FadeAlongside(coordinator, toView, YES, fromView, toView);
+        FadeAlongside(navigationController, coordinator, toView, YES, fromView, toView);
+    }
+    UIView* fromAccessory = from ? HeaderAccessoryOf(from) : nil;
+    UIView* toAccessory = to ? HeaderAccessoryOf(to) : nil;
+    if (fromAccessory && fromAccessory != toAccessory) {
+        FadeAlongside(navigationController, coordinator, fromAccessory, NO, fromView, toView);
+    }
+    if (toAccessory && toAccessory != fromAccessory) {
+        FadeAlongside(navigationController, coordinator, toAccessory, YES, fromView, toView);
     }
 }
 
-// A screen left mid-fade (a transition that never reported its end) gets its
-// alpha back once it's on screen with nothing moving.
-static void RecoverFadedScreen(UIViewController* controller) {
-    UIView* view = controller.viewIfLoaded;
-    if (!view || !objc_getAssociatedObject(view, FadeAlphaKey)) {
+// Before each frame: once no navigation controller that started a fade is
+// moving any more (finished, cancelled, or a transition that never reported
+// its end), every fade is undone and every hidden shade shown again. Shades
+// that turned out to hold something are shown at once.
+static void SettleTransitions(void) {
+    for (UIView* shade in WeakSet(&HiddenShadesStorage).allObjects) {
+        if (shade.subviews.count > 0) {
+            shade.hidden = NO;
+            [WeakSet(&HiddenShadesStorage) removeObject:shade];
+        }
+    }
+    NSHashTable* fading = WeakSet(&FadingViewsStorage);
+    if (fading.count == 0) {
         return;
     }
-    __weak UIViewController* weakController = controller;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIViewController* strongController = weakController;
-        UIView* strongView = strongController.viewIfLoaded;
-        if (strongView && !strongController.transitionCoordinator &&
-            !strongController.navigationController.transitionCoordinator) {
-            RestoreFade(strongView);
+    for (UINavigationController* navigationController in WeakSet(&FadingNavigationsStorage).allObjects) {
+        if (navigationController.transitionCoordinator) {
+            return;
         }
-    });
+    }
+    for (UIView* view in fading.allObjects) {
+        RestoreFade(view);
+    }
+    [fading removeAllObjects];
+    [WeakSet(&FadingNavigationsStorage) removeAllObjects];
+    ShowShades(WeakSet(&HiddenShadesStorage).allObjects);
 }
 
 %hook UINavigationController
@@ -1388,7 +1500,7 @@ static void PaintNavigationBar(UINavigationBar* bar, BOOL force) {
         NSMutableArray<UIView*>* queue = [NSMutableArray arrayWithObject:bar];
         for (NSUInteger i = 0; i < queue.count && i < 150; i++) {
             UIView* view = queue[i];
-            if ([view isKindOfClass:BHTWallpaperView.class]) {
+            if ([view isKindOfClass:BHTWallpaperView.class] || IsCustomBlur(view)) {
                 continue;
             }
             if (IsTabStrip(view)) {
@@ -1869,7 +1981,7 @@ static UIView* TabBarHostHolding(UIView* view) {
 // cells of lists showing the picture.
 static void ApplyToThemedView(UIView* view) {
     UIWindow* window = view.window;
-    if (!IsAppWindow(window) || [view isKindOfClass:BHTWallpaperView.class]) {
+    if (!IsAppWindow(window) || [view isKindOfClass:BHTWallpaperView.class] || IsInsideCustomBlur(view)) {
         return;
     }
     UIColor* color = EffectiveBackgroundColor(view);
@@ -2050,6 +2162,7 @@ static void ProcessThemedViews(BOOL beforeDrawing) {
     CFRunLoopObserverRef observer = CFRunLoopObserverCreateWithHandler(
         kCFAllocatorDefault, kCFRunLoopBeforeWaiting | kCFRunLoopExit, true, 1999500,
         ^(CFRunLoopObserverRef runLoopObserver, CFRunLoopActivity activity) {
+            SettleTransitions();
             ProcessThemedViews(YES);
         });
     CFRunLoopAddObserver(CFRunLoopGetMain(), observer, kCFRunLoopCommonModes);
