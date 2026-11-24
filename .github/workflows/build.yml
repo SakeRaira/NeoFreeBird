@@ -163,6 +163,16 @@ jobs:
           THEOS: ${{ github.workspace }}/theos
           BUILD_DIR: ${{ github.workspace }}/ffmpeg-build
 
+      # scar (Assets.car rebranding) has no release build for Intel Macs at the
+      # pinned version, so it's built from that same version's source there.
+      - name: Build scar for Intel runners
+        if: runner.arch == 'X64' && (inputs.deploy_format == 'sideloaded' || inputs.deploy_format == 'trollstore') && (inputs.twitter_branding || inputs.resource_pack_url != '')
+        run: |
+          SCAR_VERSION=$(python3 -c "import re; print(re.search(r'SCAR_VERSION = \"([^\"]+)\"', open('${{ github.workspace }}/main/branding/ipa_branding.py').read()).group(1))")
+          echo "Building scar ${SCAR_VERSION}"
+          cargo install --locked --git https://github.com/theacrat/scar --tag "${SCAR_VERSION}" --root "${RUNNER_TEMP}/scar"
+          echo "NFB_SCAR=${RUNNER_TEMP}/scar/bin/scar" >> "$GITHUB_ENV"
+
       - name: Rebrand IPA
         if: (inputs.deploy_format == 'sideloaded' || inputs.deploy_format == 'trollstore') && (inputs.twitter_branding || inputs.resource_pack_url != '')
         run: |
