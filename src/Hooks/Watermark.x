@@ -88,6 +88,10 @@ static BOOL ColorIsThemeBackground(UIColor* color, UIView* view) {
     if (!color) {
         return NO;
     }
+    // X mostly hands out the palette's own color object.
+    if (color == ThemeBackgroundColor()) {
+        return YES;
+    }
     UITraitCollection* traits = view.traitCollection;
     CGFloat r1, g1, b1, a1, r2, g2, b2, a2;
     if (![[color resolvedColorWithTraitCollection:traits] getRed:&r1 green:&g1 blue:&b1 alpha:&a1] ||
@@ -100,13 +104,51 @@ static BOOL ColorIsThemeBackground(UIColor* color, UIView* view) {
     return a1 > 0.98 && fabs(r1 - r2) < 0.02 && fabs(g1 - g2) < 0.02 && fabs(b1 - b2) < 0.02;
 }
 
+// Some views color their layer directly, leaving the view's color unset.
+static const void* LayerBackgroundKey = &LayerBackgroundKey;
+
 static void ClearThemeBackground(UIView* view) {
-    if (![view isKindOfClass:UIView.class] || !ColorIsThemeBackground(view.backgroundColor, view)) {
+    if (![view isKindOfClass:UIView.class]) {
         return;
     }
-    objc_setAssociatedObject(view, OriginalBackgroundKey, view.backgroundColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIColor* color = view.backgroundColor;
+    BOOL layerOnly = NO;
+    if (!color && view.layer.backgroundColor) {
+        color = [UIColor colorWithCGColor:view.layer.backgroundColor];
+        layerOnly = YES;
+    }
+    if (!ColorIsThemeBackground(color, view)) {
+        return;
+    }
+    objc_setAssociatedObject(view, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, LayerBackgroundKey, layerOnly ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [WeakSet(&ClearedViewsStorage) addObject:view];
-    view.backgroundColor = UIColor.clearColor;
+    if (layerOnly) {
+        view.layer.backgroundColor = UIColor.clearColor.CGColor;
+    } else {
+        view.backgroundColor = UIColor.clearColor;
+    }
+}
+
+// Views inside a post painted in the theme's background color: the quoted
+// post's card, the box behind the ••• button and the like. Runs once per cell
+// shown, never while scrolling, and stops early: pictures, text and inner
+// lists (media carousels) are never opened, and at most 150 views are looked
+// at.
+static void ClearThemeBackgroundsInside(UIView* root) {
+    NSMutableArray<UIView*>* queue = [root.subviews mutableCopy] ?: [NSMutableArray array];
+    for (NSUInteger i = 0; i < queue.count && i < 150; i++) {
+        UIView* view = queue[i];
+        if (view.hidden) {
+            continue;
+        }
+        ClearThemeBackground(view);
+        if ([view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class] ||
+            [view isKindOfClass:UIScrollView.class] || [view isKindOfClass:UITextView.class]) {
+            continue;
+        }
+        [queue addObjectsFromArray:view.subviews];
+    }
 }
 
 // MARK: - Lists
@@ -198,6 +240,7 @@ static void PrepareCell(UIView* cell, UIScrollView* list) {
 
     UIView* statusView = BHTSafeObject(cell, @selector(statusView));
     if ([statusView isKindOfClass:UIView.class] && [statusView isDescendantOfView:cell]) {
+        ClearThemeBackgroundsInside(statusView);
         for (UIView* view = statusView; view && view != cell; view = view.superview) {
             ClearThemeBackground(view);
         }
@@ -256,10 +299,16 @@ static void RestoreEverything(void) {
 
     for (UIView* view in WeakSet(&ClearedViewsStorage).allObjects) {
         UIColor* original = objc_getAssociatedObject(view, OriginalBackgroundKey);
-        if (original && [view.backgroundColor isEqual:UIColor.clearColor]) {
+        if (objc_getAssociatedObject(view, LayerBackgroundKey)) {
+            CGColorRef current = view.layer.backgroundColor;
+            if (original && (!current || CGColorGetAlpha(current) < 0.01)) {
+                view.layer.backgroundColor = [original resolvedColorWithTraitCollection:view.traitCollection].CGColor;
+            }
+        } else if (original && [view.backgroundColor isEqual:UIColor.clearColor]) {
             view.backgroundColor = original;
         }
         objc_setAssociatedObject(view, OriginalBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(view, LayerBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     [WeakSet(&ClearedViewsStorage) removeAllObjects];
 }
