@@ -343,6 +343,18 @@
 "SIDEBAR_ITEMS_ON_TAB_BAR" = "On the navigation bar";
 "SIDEBAR_ITEMS_SHOW_ALL" = "Show all";
 
+"BACKGROUND_WATERMARK_TITLE" = "Background picture";
+"BACKGROUND_WATERMARK_DETAIL" = "Shows a picture you choose faintly over the timelines and other tab screens, like a watermark. It stays in place while you scroll.";
+"WATERMARK_IMAGE_TITLE" = "Picture";
+"WATERMARK_IMAGE_NONE" = "None";
+"WATERMARK_IMAGE_SET" = "Set";
+"WATERMARK_IMAGE_CHOOSE" = "Choose a photo";
+"WATERMARK_IMAGE_REMOVE" = "Remove picture";
+"WATERMARK_IMAGE_FAILED" = "Couldn't save the picture";
+"WATERMARK_OPACITY_TITLE" = "Strength";
+"WATERMARK_OPACITY_MESSAGE" = "The higher the number, the more visible the picture.";
+"WATERMARK_OPACITY_FORMAT" = "%ld%%";
+
 /*Layout*/
 "HIDE_SPACES_TITLE" = "Hide the Spaces bar";
 

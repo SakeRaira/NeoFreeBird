@@ -12,8 +12,11 @@
 #import "Headers/TWHeaders.h"
 #import "Settings/ModernSettingsCells.h"
 #import "Settings/Pages/SidebarItemsViewController.h"
+#import "Core/BHTWatermark.h"
 
-@interface AppearanceSettingsViewController () <UIFontPickerViewControllerDelegate>
+@interface AppearanceSettingsViewController () <UIFontPickerViewControllerDelegate,
+                                                UIImagePickerControllerDelegate,
+                                                UINavigationControllerDelegate>
 @end
 
 @implementation AppearanceSettingsViewController
@@ -43,6 +46,15 @@
 - (UITableViewCell*)tableView:(UITableView*)tableView
         cellForRowAtIndexPath:(NSIndexPath*)indexPath {
     NSDictionary* settingData = self.visibleToggles[indexPath.row];
+    // The watermark's opacity row shows its percentage, which the generic
+    // page can't render.
+    if ([settingData[@"key"] isEqualToString:@"background_watermark_opacity"]) {
+        ModernSettingsCompactButtonCell* cell =
+            [tableView dequeueReusableCellWithIdentifier:@"CompactButtonCell" forIndexPath:indexPath];
+        NSString* title = [[BHTBundle sharedBundle] localizedStringForKey:settingData[@"titleKey"]];
+        [cell configureWithTitle:title subtitle:[self labelForWatermarkOpacity:BHTWatermark.opacityPercent]];
+        return cell;
+    }
     if ([settingData[@"type"] isEqualToString:@"button"]) {
         ModernSettingsSimpleButtonCell* cell =
             [tableView dequeueReusableCellWithIdentifier:@"SimpleButtonCell"
@@ -119,6 +131,97 @@
     [self.navigationController pushViewController:items animated:YES];
 }
 
+#pragma mark - Background watermark
+
+- (NSString*)labelForWatermarkOpacity:(NSInteger)percent {
+    return [NSString stringWithFormat:[[BHTBundle sharedBundle] localizedStringForKey:@"WATERMARK_OPACITY_FORMAT"],
+                                      (long)percent];
+}
+
+- (void)showWatermarkImageOptions:(NSDictionary*)sender {
+    BHTBundle* bundle = [BHTBundle sharedBundle];
+    UIAlertController* alert =
+        [UIAlertController alertControllerWithTitle:[bundle localizedStringForKey:@"WATERMARK_IMAGE_TITLE"]
+                                            message:nil
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:[bundle localizedStringForKey:@"WATERMARK_IMAGE_CHOOSE"]
+                                              style:UIAlertActionStyleDefault
+                                            handler:^(UIAlertAction* action) {
+                                                [self presentWatermarkImagePicker];
+                                            }]];
+    if (BHTWatermark.image) {
+        [alert addAction:[UIAlertAction actionWithTitle:[bundle localizedStringForKey:@"WATERMARK_IMAGE_REMOVE"]
+                                                  style:UIAlertActionStyleDestructive
+                                                handler:^(UIAlertAction* action) {
+                                                    [BHTWatermark removeImage];
+                                                    [self.tableView reloadData];
+                                                }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:[bundle localizedStringForKey:@"CANCEL_ACTION_LABEL"]
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)presentWatermarkImagePicker {
+    if (![UIImagePickerController isSourceTypeAvailable:UIImagePickerControllerSourceTypePhotoLibrary]) {
+        return;
+    }
+    UIImagePickerController* picker = [[UIImagePickerController alloc] init];
+    picker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
+    picker.mediaTypes = @[@"public.image"];
+    picker.delegate = self;
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)imagePickerController:(UIImagePickerController*)picker
+    didFinishPickingMediaWithInfo:(NSDictionary<UIImagePickerControllerInfoKey, id>*)info {
+    UIImage* image = info[UIImagePickerControllerOriginalImage];
+    [picker dismissViewControllerAnimated:YES
+                               completion:^{
+                                   if (![image isKindOfClass:UIImage.class]) {
+                                       return;
+                                   }
+                                   if (![BHTWatermark setImage:image]) {
+                                       BHTBundle* bundle = [BHTBundle sharedBundle];
+                                       UIAlertController* failed = [UIAlertController
+                                           alertControllerWithTitle:[bundle localizedStringForKey:@"WATERMARK_IMAGE_FAILED"]
+                                                            message:nil
+                                                     preferredStyle:UIAlertControllerStyleAlert];
+                                       [failed addAction:[UIAlertAction
+                                                             actionWithTitle:[bundle localizedStringForKey:@"OK_ACTION_LABEL"]
+                                                                       style:UIAlertActionStyleDefault
+                                                                     handler:nil]];
+                                       [self presentViewController:failed animated:YES completion:nil];
+                                   }
+                                   [self.tableView reloadData];
+                               }];
+}
+
+- (void)imagePickerControllerDidCancel:(UIImagePickerController*)picker {
+    [picker dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)showWatermarkOpacityPicker:(NSDictionary*)sender {
+    BHTBundle* bundle = [BHTBundle sharedBundle];
+    UIAlertController* alert =
+        [UIAlertController alertControllerWithTitle:[bundle localizedStringForKey:@"WATERMARK_OPACITY_TITLE"]
+                                            message:[bundle localizedStringForKey:@"WATERMARK_OPACITY_MESSAGE"]
+                                     preferredStyle:UIAlertControllerStyleAlert];
+    for (NSNumber* percent in BHTWatermark.opacityChoices) {
+        [alert addAction:[UIAlertAction actionWithTitle:[self labelForWatermarkOpacity:percent.integerValue]
+                                                  style:UIAlertActionStyleDefault
+                                                handler:^(UIAlertAction* action) {
+                                                    BHTWatermark.opacityPercent = percent.integerValue;
+                                                    [self.tableView reloadData];
+                                                }]];
+    }
+    [alert addAction:[UIAlertAction actionWithTitle:[bundle localizedStringForKey:@"CANCEL_ACTION_LABEL"]
+                                              style:UIAlertActionStyleCancel
+                                            handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
 #pragma mark - Tab Bar Refresh
 
 - (void)refreshAllTabViewsWithTheming {
@@ -183,7 +286,9 @@
 - (void)switchChanged:(UISwitch*)sender {
     [super switchChanged:sender];
     NSString* key = objc_getAssociatedObject(sender, @"prefKey");
-    if ([key isEqualToString:@"tab_bar_theming"]) {
+    if ([key isEqualToString:@"background_watermark"]) {
+        [BHTWatermark postChange];
+    } else if ([key isEqualToString:@"tab_bar_theming"]) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self refreshAllTabViewsWithTheming];
         });

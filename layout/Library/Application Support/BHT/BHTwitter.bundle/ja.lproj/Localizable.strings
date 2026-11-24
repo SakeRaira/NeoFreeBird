@@ -343,6 +343,18 @@
 "SIDEBAR_ITEMS_ON_TAB_BAR" = "ナビゲーションバーに表示中";
 "SIDEBAR_ITEMS_SHOW_ALL" = "すべて表示";
 
+"BACKGROUND_WATERMARK_TITLE" = "背景に画像を表示";
+"BACKGROUND_WATERMARK_DETAIL" = "選んだ画像を、タイムラインなどのタブの画面に透かしとして薄く重ねて表示します。スクロールしても画像は動きません。";
+"WATERMARK_IMAGE_TITLE" = "画像";
+"WATERMARK_IMAGE_NONE" = "未設定";
+"WATERMARK_IMAGE_SET" = "設定済み";
+"WATERMARK_IMAGE_CHOOSE" = "写真を選択";
+"WATERMARK_IMAGE_REMOVE" = "画像を削除";
+"WATERMARK_IMAGE_FAILED" = "画像を保存できませんでした";
+"WATERMARK_OPACITY_TITLE" = "画像の濃さ";
+"WATERMARK_OPACITY_MESSAGE" = "数字が大きいほど、画像がはっきり表示されます。";
+"WATERMARK_OPACITY_FORMAT" = "%ld%%";
+
 /*Layout*/
 "HIDE_SPACES_TITLE" = "スペースを非表示";
 

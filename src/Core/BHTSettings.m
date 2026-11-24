@@ -89,6 +89,26 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"action": @"showBoldFontPicker:",
                         @"prefKeyForSubtitle": @"bhtwitter_font_2",
                         @"subtitleDefaultKey": @"FONT_SYSTEM_DEFAULT_SUBTITLE"
+                    },
+                    // A picture shown faintly over the tab screens (BHTWatermark).
+                    @{@"key": @"background_watermark",
+                      @"default": @NO},
+                    @{
+                        @"type": @"compactButton",
+                        @"parentKey": @"background_watermark",
+                        @"key": @"background_watermark_image_button",
+                        @"titleKey": @"WATERMARK_IMAGE_TITLE",
+                        @"action": @"showWatermarkImageOptions:",
+                        @"prefKeyForSubtitle": @"background_watermark_image_summary",
+                        @"subtitleDefaultKey": @"WATERMARK_IMAGE_NONE"
+                    },
+                    @{
+                        @"type": @"compactButton",
+                        @"parentKey": @"background_watermark",
+                        @"key": @"background_watermark_opacity",
+                        @"default": @15,
+                        @"titleKey": @"WATERMARK_OPACITY_TITLE",
+                        @"action": @"showWatermarkOpacityPicker:"
                     }
                 ]
             },

@@ -396,6 +396,57 @@ static NSString* ConversationModuleKey(id viewModel) {
     return [entryID substringWithRange:[match rangeAtIndex:1]];
 }
 
+// The post an item shows: its own ID, or that of the status it wraps.
+static long long ItemStatusID(id viewModel) {
+    long long statusID = BHTSafeLongLong(viewModel, @selector(statusID));
+    for (NSString* link in @[@"status", @"tweet", @"statusViewModel", @"representedStatus"]) {
+        if (statusID != 0) {
+            break;
+        }
+        statusID = BHTSafeLongLong(BHTSafeObject(viewModel, NSSelectorFromString(link)), @selector(statusID));
+    }
+    return statusID;
+}
+
+// The posts a hidden reply answers, and the ones those answer in turn: X
+// shows them above the reply to give it context, and without the reply they
+// are left on the timeline on their own.
+static NSSet<NSNumber*>* PostsAnsweredByHiddenReplies(NSArray* sections) {
+    NSMutableDictionary<NSNumber*, NSNumber*>* parentOfPost = [NSMutableDictionary dictionary];
+    NSMutableArray<NSNumber*>* pending = [NSMutableArray array];
+
+    for (id section in sections) {
+        if (![section isKindOfClass:[NSArray class]]) {
+            continue;
+        }
+        for (id item in (NSArray*)section) {
+            id viewModel = unwrapDataViewItem(item);
+            long long statusID = ItemStatusID(viewModel);
+            long long parentID = BHTSafeLongLong(viewModel, @selector(inReplyToStatusID));
+            if (statusID != 0) {
+                parentOfPost[@(statusID)] = @(parentID);
+            }
+            if (parentID != 0 && ItemIsReplyToOthers(viewModel)) {
+                [pending addObject:@(parentID)];
+            }
+        }
+    }
+
+    NSMutableSet<NSNumber*>* answered = [NSMutableSet set];
+    while (pending.count > 0 && answered.count < 64) {
+        NSNumber* postID = pending.lastObject;
+        [pending removeLastObject];
+        if ([answered containsObject:postID] || !parentOfPost[postID]) {
+            continue;
+        }
+        [answered addObject:postID];
+        if (parentOfPost[postID].longLongValue != 0) {
+            [pending addObject:parentOfPost[postID]];
+        }
+    }
+    return answered;
+}
+
 // Modules holding a hidden reply. The posts above it only came along to give
 // the reply its context, so the whole module goes.
 static NSSet<NSString*>* ConversationModulesWithHiddenReplies(NSArray* sections) {
@@ -863,6 +914,8 @@ static NSArray* FilteredTimelineSections(TFNItemsDataViewController* dataViewCon
     // Depends on the other items in this update, so it isn't memoized.
     NSSet<NSString*>* hiddenModules =
         context.hideReplies ? ConversationModulesWithHiddenReplies(sections) : nil;
+    NSSet<NSNumber*>* answeredPosts =
+        context.hideReplies ? PostsAnsweredByHiddenReplies(sections) : nil;
 
     // Modules can share a section with unrelated items, so filtering is per item;
     // a purely filtered section (like the Discover More one) empties and is dropped.
@@ -882,6 +935,13 @@ static NSArray* FilteredTimelineSections(TFNItemsDataViewController* dataViewCon
             if (hiddenModules.count > 0) {
                 NSString* module = ConversationModuleKey(unwrapDataViewItem(items[i]));
                 if (module && [hiddenModules containsObject:module]) {
+                    [removed addIndex:i];
+                    continue;
+                }
+            }
+            if (answeredPosts.count > 0) {
+                long long statusID = ItemStatusID(unwrapDataViewItem(items[i]));
+                if (statusID != 0 && [answeredPosts containsObject:@(statusID)]) {
                     [removed addIndex:i];
                     continue;
                 }
