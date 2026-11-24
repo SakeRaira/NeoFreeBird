@@ -70,6 +70,9 @@ static const void* FadeTransitionKey = &FadeTransitionKey;
 static const void* FadeNavigationKey = &FadeNavigationKey;
 static const void* PlateKey = &PlateKey;
 static const void* OverlayOriginalColorKey = &OverlayOriginalColorKey;
+static const void* TintAlphaKey = &TintAlphaKey;
+static const void* OverlayBackgroundKey = &OverlayBackgroundKey;
+static const void* AddedOverlaysKey = &AddedOverlaysKey;
 static const void* ScreenNormalAlphaKey = &ScreenNormalAlphaKey;
 static const void* KeepClearKey = &KeepClearKey;
 
@@ -186,6 +189,107 @@ static BOOL ColorIsThemeBackground(UIColor* color, UIView* view) {
     return ColorMatchesTheme(color, view, 0.85);
 }
 
+// How far a color is from the theme's background (the largest difference in
+// red, green or blue), with its alpha. 1 when it can't be compared.
+static CGFloat ThemeDistance(UIColor* color, UIView* view, CGFloat* alphaOut) {
+    *alphaOut = 0;
+    if (!color) {
+        return 1;
+    }
+    UITraitCollection* traits = view.traitCollection;
+    CGFloat r1, g1, b1, a1, r2, g2, b2, a2;
+    if (![[color resolvedColorWithTraitCollection:traits] getRed:&r1 green:&g1 blue:&b1 alpha:&a1]) {
+        return 1;
+    }
+    *alphaOut = a1;
+    UIColor* theme = ThemeBackgroundColor();
+    if (color == theme) {
+        return 0;
+    }
+    if (![[theme resolvedColorWithTraitCollection:traits] getRed:&r2 green:&g2 blue:&b2 alpha:&a2]) {
+        return 1;
+    }
+    return MAX(fabs(r1 - r2), MAX(fabs(g1 - g2), fabs(b1 - b2)));
+}
+
+static id CurrentPalette(void) {
+    id settings = BHTSafeObject(objc_getClass("TAEColorSettings"), @selector(sharedSettings));
+    id info = BHTSafeObject(settings, @selector(currentColorPalette));
+    return BHTSafeObject(info, @selector(colorPalette));
+}
+
+// X's colors for a pressed or selected post, card or row, read from the
+// palette (again when the theme changes).
+static NSArray<UIColor*>* HighlightColors(void) {
+    static NSArray<UIColor*>* cached;
+    static UIColor* readForTheme;
+    UIColor* theme = ThemeBackgroundColor();
+    if (cached && readForTheme == theme) {
+        return cached;
+    }
+    NSMutableArray<UIColor*>* colors = [NSMutableArray array];
+    id palette = CurrentPalette();
+    for (NSString* name in @[@"highlightedStatusBackgroundColor", @"statusCellOverlayHighlightedColor",
+                             @"highlightDarkBackgroundColor", @"dmInboxCellSelectionBackgroundColor"]) {
+        UIColor* color = BHTSafeObject(palette, NSSelectorFromString(name));
+        if ([color isKindOfClass:UIColor.class]) {
+            [colors addObject:color];
+        }
+    }
+    cached = colors;
+    readForTheme = theme;
+    return cached;
+}
+
+static BOOL SameColor(UIColor* a, UIColor* b, UITraitCollection* traits) {
+    if (a == b) {
+        return YES;
+    }
+    CGFloat r1, g1, b1, a1, r2, g2, b2, a2;
+    if (![[a resolvedColorWithTraitCollection:traits] getRed:&r1 green:&g1 blue:&b1 alpha:&a1] ||
+        ![[b resolvedColorWithTraitCollection:traits] getRed:&r2 green:&g2 blue:&b2 alpha:&a2]) {
+        return NO;
+    }
+    return fabs(r1 - r2) < 0.01 && fabs(g1 - g2) < 0.01 && fabs(b1 - b2) < 0.01 && fabs(a1 - a2) < 0.05;
+}
+
+static BOOL IsInsideSidebar(UIView* view);
+
+static BOOL IsInsideCell(UIView* view) {
+    for (UIView* ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
+        if ([ancestor isKindOfClass:UITableViewCell.class] || [ancestor isKindOfClass:UICollectionViewCell.class]) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+// A pressed or selected highlight: one of X's highlight colors, or (in a
+// row or the sidebar) an opaque color just off the theme's background.
+// Over the wallpaper those would show as patches of the theme color.
+static BOOL IsHighlightColor(UIColor* color, UIView* view, CGFloat distance, CGFloat alpha) {
+    if (alpha < 0.05) {
+        return NO;
+    }
+    UITraitCollection* traits = view.traitCollection;
+    for (UIColor* highlight in HighlightColors()) {
+        if (SameColor(color, highlight, traits)) {
+            return YES;
+        }
+    }
+    return distance >= 0.03 && distance <= 0.10 && alpha >= 0.85 && (IsInsideCell(view) || IsInsideSidebar(view));
+}
+
+// What a highlight looks like over the wallpaper.
+static UIColor* HighlightTint(void) {
+    static UIColor* tint;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        tint = [UIColor colorWithWhite:0 alpha:0.3];
+    });
+    return tint;
+}
+
 // The color the view actually draws: its layer's. X answers `backgroundColor`
 // with the color it recorded for the view, which isn't what's drawn once the
 // view was made clear.
@@ -236,31 +340,99 @@ static BOOL KeepsClear(UIView* view) {
 }
 
 // Views X painted in the theme color since the last pass, handled before
-// the frame is drawn (see ProcessThemedViews).
+// the frame is drawn (see ProcessThemedViews); and those painted while not
+// on screen, handled as they come on screen.
 static NSHashTable* ThemedViewsStorage;
 static BOOL ThemedViewsPending;
+static NSHashTable* OffscreenThemedViewsStorage;
+static BOOL OffscreenThemedViewsPending;
+static BOOL BlurTintsExist;
 
-// Every time X (or anything) gives a view the theme's background color:
+static void ApplyToThemedView(UIView* view);
+static void ApplyTintPiece(UIView* tint);
+
+// The tint X lays over one of its blurs (the profile header's, collapsed):
+// its own view inside the blur.
+static BOOL IsBlurTint(UIView* view) {
+    UIView* parent = view.superview;
+    for (int i = 0; i < 3 && parent; i++, parent = parent.superview) {
+        if (IsCustomBlur(parent)) {
+            id tint = nfb_objectIvar(parent, "tintView");
+            if ([tint isKindOfClass:UIView.class]) {
+                return tint == view;
+            }
+            return view.subviews.count == 0;
+        }
+    }
+    return NO;
+}
+
+// The tint shows the wallpaper at its strength instead of the theme color;
+// the blur itself is left alone.
+static void ShowWallpaperAsTint(UIView* tint, UIColor* color, CGFloat alpha) {
+    objc_setAssociatedObject(tint, PlateKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(tint, TintAlphaKey, @(alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(tint, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(tint, LayerBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [WeakSet(&ClearedViewsStorage) addObject:tint];
+    BlurTintsExist = YES;
+    ApplyTintPiece(tint);
+}
+
+// Every time X (or anything) gives a view a background color:
 // - a view made clear stays clear, in the same call, so it never flashes
 //   back (X calls the setter again whenever the look changes);
-// - any other view is noted, and gets made clear or its part of the picture
-//   before the frame is drawn.
+// - a blur's tint in the theme color shows the wallpaper instead;
+// - a pressed or selected highlight becomes a dark tint;
+// - any other view given the theme's background color is noted, and gets
+//   made clear or its part of the picture before the frame is drawn.
 %hook UIView
 
 - (void)setBackgroundColor:(UIColor*)color {
     if (WallpaperOn && color) {
         BOOL keepsClear = KeepsClear(self);
-        if ((keepsClear || BarsOn) && ColorMatchesTheme(color, self, 0.5)) {
-            if (keepsClear) {
-                objc_setAssociatedObject(self, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (keepsClear || BarsOn) {
+            CGFloat alpha = 0;
+            CGFloat distance = ThemeDistance(color, self, &alpha);
+            BOOL themeColored = distance < 0.03;
+            if (FullOn && themeColored && IsBlurTint(self)) {
+                ShowWallpaperAsTint(self, color, alpha);
                 %orig(UIColor.clearColor);
                 return;
             }
-            [WeakSet(&ThemedViewsStorage) addObject:self];
-            ThemedViewsPending = YES;
+            if (themeColored && alpha >= 0.5) {
+                if (keepsClear) {
+                    objc_setAssociatedObject(self, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    %orig(UIColor.clearColor);
+                    return;
+                }
+                [WeakSet(&ThemedViewsStorage) addObject:self];
+                ThemedViewsPending = YES;
+            } else if (FullOn && !themeColored && IsHighlightColor(color, self, distance, alpha)) {
+                %orig(HighlightTint());
+                return;
+            }
         }
     }
     %orig;
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    UIView* view = (UIView*)self;
+    if (!view.window) {
+        return;
+    }
+    if (OffscreenThemedViewsPending) {
+        NSHashTable* offscreen = WeakSet(&OffscreenThemedViewsStorage);
+        if ([offscreen containsObject:view]) {
+            [offscreen removeObject:view];
+            ApplyToThemedView(view);
+        }
+    }
+    if (BlurTintsExist && FullOn && objc_getAssociatedObject(view, TintAlphaKey)) {
+        ApplyTintPiece(view);
+    }
 }
 
 %end
@@ -307,6 +479,44 @@ static void ClearThemeBackgroundsInside(UIView* root) {
 }
 
 // MARK: - Alignment
+
+static BOOL HoldsMainApp(UIView* view);
+
+// The modal `view` is in: a view controller opened over another, not inside
+// one (the main app itself never counts).
+static UIViewController* PresentedRootOf(UIView* view) {
+    for (UIView* ancestor = view; ancestor; ancestor = ancestor.superview) {
+        UIResponder* responder = ancestor.nextResponder;
+        if ([responder isKindOfClass:UIViewController.class]) {
+            UIViewController* controller = (UIViewController*)responder;
+            if (controller.viewIfLoaded == ancestor && controller.presentingViewController &&
+                !controller.parentViewController) {
+                return HoldsMainApp(ancestor) ? nil : controller;
+            }
+        }
+    }
+    return nil;
+}
+
+// A modal that keeps the screen it was opened from on screen behind it (the
+// media viewer, whose background fades to show that screen as the picture is
+// dragged away). It gets no back and nothing in it is made clear, so it
+// shows the screen behind it the way X means it to.
+static BOOL IsInsideSeeThroughPresentation(UIView* view) {
+    UIViewController* presented = PresentedRootOf(view);
+    if (!presented) {
+        return NO;
+    }
+    UIModalPresentationStyle style = presented.modalPresentationStyle;
+    if (style == UIModalPresentationOverFullScreen || style == UIModalPresentationOverCurrentContext) {
+        return YES;
+    }
+    if (style == UIModalPresentationCustom) {
+        UIPresentationController* presentation = presented.presentationController;
+        return presentation && !presentation.shouldRemovePresentersView;
+    }
+    return NO;
+}
 
 // What the picture is laid out against, the size of the window and anchored
 // at its top left: a sheet or modal's own view (it slides as one piece),
@@ -569,6 +779,22 @@ static void PaintPiece(UIView* view) {
     AlignPiece(view);
 }
 
+// A blur tint's part: the wallpaper at the tint's strength.
+static void ApplyTintPiece(UIView* tint) {
+    NSNumber* alpha = objc_getAssociatedObject(tint, TintAlphaKey);
+    if (!alpha || !tint.window) {
+        return;
+    }
+    PaintPiece(tint);
+    CALayer* container = PieceLayer(tint, NO);
+    if (container && fabsf(container.opacity - alpha.floatValue) > 0.001f) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        container.opacity = alpha.floatValue;
+        [CATransaction commit];
+    }
+}
+
 // Lines every part in a window up again; parts only move with layout (a
 // collapsing header, a sticky strip in a scrolling list).
 static void RealignPieces(UIWindow* window) {
@@ -752,7 +978,8 @@ static void PrepareVisibleCells(UIScrollView* list) {
 // bottom of its alignment reference.
 static void EnsureBack(UIView* view) {
     UIView* back = AlignmentReference(view);
-    if (back && back != view.window && ![back isKindOfClass:UIScrollView.class]) {
+    if (back && back != view.window && ![back isKindOfClass:UIScrollView.class] &&
+        !IsInsideSeeThroughPresentation(back)) {
         objc_setAssociatedObject(back, PlateKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         PaintPiece(back);
     }
@@ -1084,7 +1311,7 @@ static BOOL MakeListClear(UIScrollView* list) {
     if (!FullOn || !IsAppWindow(list.window)) {
         return NO;
     }
-    if (IsHostList(list)) {
+    if (IsHostList(list) || IsInsideSeeThroughPresentation(list)) {
         return NO;
     }
     UIColor* color = EffectiveBackgroundColor(list);
@@ -1133,7 +1360,7 @@ static void ConsiderList(UIScrollView* list) {
 static void ClearController(UIViewController* controller, BOOL force) {
     UIView* root = controller.viewIfLoaded;
     UIWindow* window = root.window;
-    if (!root || !IsAppWindow(window)) {
+    if (!root || !IsAppWindow(window) || IsInsideSeeThroughPresentation(root)) {
         return;
     }
     NSUInteger signature = (Generation << 16) ^ root.subviews.count;
@@ -1704,8 +1931,9 @@ static NSArray<UIView*>* TransitionOverlayCandidates(id<UIViewControllerContextT
 }
 
 // The overlay X just added (a new screen-sized view in the theme color, not
-// a screen or one holding a screen) gets the picture.
-static void PaintTransitionOverlay(id<UIViewControllerContextTransitioning> transition, NSHashTable* before) {
+// a screen or one holding a screen) gets the picture. How many were found.
+static NSUInteger PaintTransitionOverlay(id<UIViewControllerContextTransitioning> transition, NSHashTable* before) {
+    NSUInteger painted = 0;
     UIView* container = transition.containerView;
     UIView* fromView = [transition viewControllerForKey:UITransitionContextFromViewControllerKey].viewIfLoaded;
     UIView* toView = [transition viewControllerForKey:UITransitionContextToViewControllerKey].viewIfLoaded;
@@ -1724,7 +1952,63 @@ static void PaintTransitionOverlay(id<UIViewControllerContextTransitioning> tran
         }
         objc_setAssociatedObject(view, PlateKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         PaintPiece(view);
+        painted++;
     }
+    return painted;
+}
+
+// Opening a screen when X's animator didn't dim the one underneath: a
+// wallpaper overlay of our own goes over it, between the two screens, and
+// fades in over the slide, so the old screen fades out as the new one comes
+// in. It's removed when the transition ends.
+static void AddPushOverlay(id animator, id<UIViewControllerContextTransitioning> transition) {
+    if (transition.isInteractive) {
+        return;
+    }
+    UIView* container = transition.containerView;
+    UIView* fromView = [transition viewControllerForKey:UITransitionContextFromViewControllerKey].viewIfLoaded;
+    UIView* toView = [transition viewControllerForKey:UITransitionContextToViewControllerKey].viewIfLoaded;
+    if (!container || !fromView || ![fromView isDescendantOfView:container]) {
+        return;
+    }
+    UIView* holder = fromView;
+    while (holder.superview && holder.superview != container) {
+        holder = holder.superview;
+    }
+    if (holder.superview != container || (toView && [toView isDescendantOfView:holder])) {
+        return;
+    }
+    BHTWallpaperView* overlay = [[BHTWallpaperView alloc] initWithFrame:container.bounds];
+    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    UpdateWallpaperView(overlay);
+    overlay.alpha = 0;
+    [container insertSubview:overlay aboveSubview:holder];
+    NSMutableArray<UIView*>* added = objc_getAssociatedObject(animator, AddedOverlaysKey);
+    if (!added) {
+        added = [NSMutableArray array];
+        objc_setAssociatedObject(animator, AddedOverlaysKey, added, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [added addObject:overlay];
+    NSTimeInterval duration = 0.3;
+    if ([animator respondsToSelector:@selector(transitionDuration:)]) {
+        duration = ((NSTimeInterval (*)(id, SEL, id))objc_msgSend)(animator, @selector(transitionDuration:),
+                                                                   transition);
+    }
+    [UIView animateWithDuration:duration
+                          delay:0
+                        options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
+                         overlay.alpha = 1;
+                     }
+                     completion:nil];
+}
+
+static void RemoveAddedOverlays(id animator) {
+    NSMutableArray<UIView*>* added = objc_getAssociatedObject(animator, AddedOverlaysKey);
+    for (UIView* overlay in added) {
+        [overlay removeFromSuperview];
+    }
+    [added removeAllObjects];
 }
 
 %group TFNOverlay
@@ -1732,6 +2016,7 @@ static void PaintTransitionOverlay(id<UIViewControllerContextTransitioning> tran
 
 - (void)animateTransition:(id<UIViewControllerContextTransitioning>)transition {
     PrepareTransitionOverlay(self);
+    RemoveAddedOverlays(self);
     if (!FullOn) {
         %orig;
         return;
@@ -1742,7 +2027,18 @@ static void PaintTransitionOverlay(id<UIViewControllerContextTransitioning> tran
         [before addObject:view];
     }
     %orig;
-    PaintTransitionOverlay(transition, before);
+    NSUInteger painted = PaintTransitionOverlay(transition, before);
+    long long operation = [(id)self respondsToSelector:@selector(operation)]
+                              ? ((long long (*)(id, SEL))objc_msgSend)(self, @selector(operation))
+                              : 0;
+    if (painted == 0 && operation == UINavigationControllerOperationPush) {
+        AddPushOverlay(self, transition);
+    }
+}
+
+- (void)animationEnded:(BOOL)transitionCompleted {
+    %orig;
+    RemoveAddedOverlays(self);
 }
 
 - (double)_tfn_maximumAlphaForTransition:(id)transition {
@@ -1954,6 +2250,16 @@ static void KeepMainBackInPlace(UIWindow* window) {
     }
 }
 
+static BOOL IsInsideSidebar(UIView* view) {
+    UIView* sidebar = SidebarView;
+    return sidebar && [view isDescendantOfView:sidebar];
+}
+
+static BOOL HoldsMainApp(UIView* view) {
+    UIView* split = AppSplit.viewIfLoaded;
+    return split && [split isDescendantOfView:view];
+}
+
 static UIView* SidebarOf(UIViewController* split) {
     UIViewController* dash = BHTSafeObject(split, @selector(dashViewController));
     UIView* view = [dash isKindOfClass:UIViewController.class] ? dash.viewIfLoaded : nil;
@@ -2024,9 +2330,41 @@ static void SetSidebarAlpha(UIViewController* split, UIView* sidebar, CGFloat al
     }];
 }
 
+// X darkens the content (and the sidebar) with an overlay as the sidebar
+// opens. Over the wallpaper that's a dark veil, so in "every screen" mode the
+// overlay's color is made clear; the overlay itself stays (it takes the tap
+// that closes the sidebar). Its color is put back when the mode is off.
+static void ClearSidebarOverlays(UIViewController* split) {
+    if (!split) {
+        return;
+    }
+    for (NSString* name in @[@"_contentHostView", @"_dashHostView"]) {
+        UIView* host = nfb_objectIvar(split, name.UTF8String);
+        UIView* overlay = BHTSafeObject(host, @selector(overlayView));
+        if (![overlay isKindOfClass:UIView.class]) {
+            continue;
+        }
+        if (FullOn) {
+            CGColorRef drawn = overlay.layer.backgroundColor;
+            if (drawn && CGColorGetAlpha(drawn) > 0.01) {
+                UIColor* original = overlay.backgroundColor ?: [UIColor colorWithCGColor:drawn];
+                objc_setAssociatedObject(overlay, OverlayBackgroundKey, original, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                overlay.backgroundColor = UIColor.clearColor;
+            }
+        } else {
+            UIColor* original = objc_getAssociatedObject(overlay, OverlayBackgroundKey);
+            if (original) {
+                objc_setAssociatedObject(overlay, OverlayBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                overlay.backgroundColor = original;
+            }
+        }
+    }
+}
+
 // The sidebar's alpha follows how far it's open in "every screen" mode, so it
 // isn't seen through the clear content while it waits.
 static void UpdateSidebarFade(UIViewController* split) {
+    ClearSidebarOverlays(split);
     UIView* sidebar = SidebarOf(split);
     if (FullOn && sidebar && IsAppWindow(sidebar.window) && SidebarWaitsBehindContent(split, sidebar)) {
         FadedSidebar = sidebar;
@@ -2054,6 +2392,11 @@ static void SidebarMoved(UIViewController* split) {
 }
 
 - (void)private_applyDashLayoutAndNotify {
+    %orig;
+    SidebarMoved((UIViewController*)self);
+}
+
+- (void)private_updateOverlayViews {
     %orig;
     SidebarMoved((UIViewController*)self);
 }
@@ -2276,7 +2619,15 @@ static UIView* TabBarHostHolding(UIView* view) {
 // cells of lists showing the picture.
 static void ApplyToThemedView(UIView* view) {
     UIWindow* window = view.window;
-    if (!IsAppWindow(window) || [view isKindOfClass:BHTWallpaperView.class] || IsInsideCustomBlur(view)) {
+    if (!window) {
+        // Painted before going on screen (a tab's header coming back): handled
+        // as it comes on screen, before it's drawn.
+        [WeakSet(&OffscreenThemedViewsStorage) addObject:view];
+        OffscreenThemedViewsPending = YES;
+        return;
+    }
+    if (!IsAppWindow(window) || [view isKindOfClass:BHTWallpaperView.class] || IsInsideCustomBlur(view) ||
+        IsInsideSeeThroughPresentation(view)) {
         return;
     }
     UIColor* color = EffectiveBackgroundColor(view);
