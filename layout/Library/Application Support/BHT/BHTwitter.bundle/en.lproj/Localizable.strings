@@ -350,7 +350,7 @@
 "SIDEBAR_ITEMS_SHOW_ALL" = "Show all";
 
 "BACKGROUND_WATERMARK_TITLE" = "Wallpaper";
-"BACKGROUND_WATERMARK_DETAIL" = "Shows a picture you choose behind the timelines and other tab screens. Posts and icons stay on top of it, and it stays in place while you scroll.";
+"BACKGROUND_WATERMARK_DETAIL" = "Shows a picture you choose behind timelines, profiles, search results and other lists of posts. Posts and icons stay on top of it, and it stays in place while you scroll.";
 "WATERMARK_IMAGE_TITLE" = "Picture";
 "WATERMARK_IMAGE_NONE" = "None";
 "WATERMARK_IMAGE_SET" = "Set";

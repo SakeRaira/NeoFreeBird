@@ -2,16 +2,23 @@
 //  Watermark.x
 //  NeoFreeBird
 //
-//  Wallpaper: the chosen picture (BHTWatermark) behind each tab's screens.
-//  It sits at the bottom of the tab's navigation controller view, the theme's
-//  background color over it at the chosen strength, so it stays put while
-//  timelines scroll and never covers text or icons.
+//  Wallpaper: the chosen picture (BHTWatermark) behind the timelines.
 //
-//  For it to show, what is painted in the theme's background color above it
-//  is made clear: full-height screens, the timelines and lists, and their
-//  cells. Short views such as the Home tab strip keep their color, so content
-//  scrolling under them doesn't show through. Every color changed is
-//  remembered and put back when the wallpaper is turned off.
+//  Each timeline list (the table or collection view of a
+//  TFNItemsDataViewController inside a tab) gets it as its backgroundView,
+//  which UIKit draws behind the cells, sized to the list and fixed while it
+//  scrolls. Its theme-colored tint sets how strongly the picture shows.
+//
+//  X's cells paint their own background through a private view of
+//  TFNTableViewCell, not their background color; the cell's
+//  hostProvidesBackground switch, made for lists that draw the background
+//  themselves, turns that off. It's set as each cell is about to show, along
+//  with clearing the few views in it painted in the theme's background color.
+//  Every change is remembered and undone when the wallpaper is turned off.
+//
+//  Nothing is added to UIKit's own container views: an earlier version kept
+//  the picture at the bottom of the navigation view, where it fought UIKit
+//  for the first place on every layout.
 //
 
 #import <QuartzCore/QuartzCore.h>
@@ -30,7 +37,6 @@
         self.isAccessibilityElement = NO;
         self.accessibilityElementsHidden = YES;
         self.clipsToBounds = YES;
-        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
         _imageView = [[UIImageView alloc] initWithFrame:self.bounds];
         _imageView.contentMode = UIViewContentModeScaleAspectFill;
@@ -46,38 +52,27 @@
 
 @end
 
-static const void* WallpaperViewKey = &WallpaperViewKey;
+static const void* ListWallpaperKey = &ListWallpaperKey;
+static const void* ListOriginalBackgroundViewKey = &ListOriginalBackgroundViewKey;
 static const void* OriginalBackgroundKey = &OriginalBackgroundKey;
-static const void* WallpaperListKey = &WallpaperListKey;
-static const void* WallpaperCellKey = &WallpaperCellKey;
-static const void* WallpaperPassKey = &WallpaperPassKey;
 
-// Read on every cell layout, so kept here instead of asking the settings.
+// Read for every cell shown, so kept here instead of asking the settings.
 static BOOL WallpaperOn;
-// Bumped on every change; list and cell marks from an older one are stale.
-static NSUInteger WallpaperGeneration = 1;
 
-static NSHashTable<UINavigationController*>* WallpaperedNavigationControllers(void) {
-    static NSHashTable* controllers;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        controllers = [NSHashTable weakObjectsHashTable];
-    });
-    return controllers;
+static NSHashTable* WeakSet(NSHashTable* __strong* storage) {
+    if (!*storage) {
+        *storage = [NSHashTable weakObjectsHashTable];
+    }
+    return *storage;
 }
 
-static NSHashTable<UIView*>* ClearedViews(void) {
-    static NSHashTable* views;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        views = [NSHashTable weakObjectsHashTable];
-    });
-    return views;
-}
+static NSHashTable* SeenControllersStorage;
+static NSHashTable* WallpaperedListsStorage;
+static NSHashTable* HostChangedCellsStorage;
+static NSHashTable* ClearedViewsStorage;
 
 // MARK: - Theme background
 
-// The palette is read at most once a second; it only changes with the theme.
 static UIColor* ThemeBackgroundColor(void) {
     static UIColor* cached;
     static CFTimeInterval readAt;
@@ -106,111 +101,50 @@ static BOOL ColorIsThemeBackground(UIColor* color, UIView* view) {
 }
 
 static void ClearThemeBackground(UIView* view) {
-    if (!view || [view isKindOfClass:BHTWallpaperView.class] ||
-        !ColorIsThemeBackground(view.backgroundColor, view)) {
+    if (![view isKindOfClass:UIView.class] || !ColorIsThemeBackground(view.backgroundColor, view)) {
         return;
     }
     objc_setAssociatedObject(view, OriginalBackgroundKey, view.backgroundColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [ClearedViews() addObject:view];
+    [WeakSet(&ClearedViewsStorage) addObject:view];
     view.backgroundColor = UIColor.clearColor;
 }
 
-static void RestoreClearedBackgrounds(void) {
-    for (UIView* view in ClearedViews().allObjects) {
-        UIColor* original = objc_getAssociatedObject(view, OriginalBackgroundKey);
-        if (original && [view.backgroundColor isEqual:UIColor.clearColor]) {
-            view.backgroundColor = original;
-        }
-        objc_setAssociatedObject(view, OriginalBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    [ClearedViews() removeAllObjects];
-}
+// MARK: - Lists
 
-// MARK: - Screens and lists
-
-static BOOL IsList(UIView* view) {
-    return [view isKindOfClass:UITableView.class] || [view isKindOfClass:UICollectionView.class];
-}
-
-// Screens and lists that fill most of the tab, as opposed to bars and headers.
-static BOOL IsFullHeight(UIView* view, UIView* container) {
-    return view.bounds.size.height >= container.bounds.size.height * 0.5;
-}
-
-static void ClearList(UIView* list, UIView* container) {
-    if (!IsFullHeight(list, container)) {
-        return;
-    }
-    ClearThemeBackground(list);
-    if ([list isKindOfClass:UITableView.class]) {
-        ClearThemeBackground(((UITableView*)list).backgroundView);
-    } else if ([list isKindOfClass:UICollectionView.class]) {
-        ClearThemeBackground(((UICollectionView*)list).backgroundView);
-    }
-    objc_setAssociatedObject(list, WallpaperListKey, @(WallpaperGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
-// Walks the tab's view tree down to its lists, whose cells are handled as
-// they lay out.
-static void ClearScreens(UIView* container, UIView* navigationBar) {
-    NSMutableArray<UIView*>* queue = [NSMutableArray array];
-    for (UIView* subview in container.subviews) {
-        if (subview != navigationBar && ![subview isKindOfClass:BHTWallpaperView.class]) {
-            [queue addObject:subview];
+static UIScrollView* ListOfController(UIViewController* controller) {
+    for (NSString* name in @[@"tableView", @"collectionView"]) {
+        id list = BHTSafeObject(controller, NSSelectorFromString(name));
+        if ([list isKindOfClass:UITableView.class] || [list isKindOfClass:UICollectionView.class]) {
+            return list;
         }
     }
+    return nil;
+}
 
-    for (NSUInteger i = 0; i < queue.count && i < 400; i++) {
-        UIView* view = queue[i];
-        if (view.hidden || !IsFullHeight(view, container)) {
-            continue;
-        }
-        if (IsList(view)) {
-            ClearList(view, container);
-            continue;
-        }
-        ClearThemeBackground(view);
-        [queue addObjectsFromArray:view.subviews];
+static UIView* ListBackgroundView(UIScrollView* list) {
+    return [list respondsToSelector:@selector(backgroundView)] ? [(id)list backgroundView] : nil;
+}
+
+static void SetListBackgroundView(UIScrollView* list, UIView* view) {
+    if ([list respondsToSelector:@selector(setBackgroundView:)] && ListBackgroundView(list) != view) {
+        [(id)list setBackgroundView:view];
     }
 }
 
-// MARK: - The wallpaper
-
-// The tree walk runs again only for a new screen on top or a new setting:
-// layout can come often (bars collapsing while scrolling).
-static BOOL NeedsScreenPass(UINavigationController* navigationController) {
-    NSString* pass = [NSString stringWithFormat:@"%lu-%p-%lu", (unsigned long)WallpaperGeneration,
-                                                (__bridge void*)navigationController.topViewController,
-                                                (unsigned long)navigationController.viewControllers.count];
-    if ([objc_getAssociatedObject(navigationController, WallpaperPassKey) isEqualToString:pass]) {
+// Full timelines inside a tab, not small embedded lists such as carousels.
+static BOOL ControllerWantsWallpaper(UIViewController* controller, UIScrollView* list) {
+    if (!WallpaperOn || !list) {
         return NO;
     }
-    objc_setAssociatedObject(navigationController, WallpaperPassKey, pass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    return YES;
+    Class tabNavigationClass = objc_getClass("T1TabNavigationController");
+    UINavigationController* navigationController = controller.navigationController;
+    if (!tabNavigationClass || ![navigationController isKindOfClass:tabNavigationClass]) {
+        return NO;
+    }
+    return list.bounds.size.height >= navigationController.view.bounds.size.height * 0.5;
 }
 
-static void UpdateWallpaper(UINavigationController* navigationController, BOOL force) {
-    UIView* container = navigationController.isViewLoaded ? navigationController.view : nil;
-    BHTWallpaperView* wallpaper = objc_getAssociatedObject(navigationController, WallpaperViewKey);
-    if (!container || !WallpaperOn) {
-        [wallpaper removeFromSuperview];
-        return;
-    }
-
-    if (!wallpaper) {
-        wallpaper = [[BHTWallpaperView alloc] initWithFrame:container.bounds];
-        objc_setAssociatedObject(navigationController, WallpaperViewKey, wallpaper,
-                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-
-    // Moved only when out of place: this runs from layout.
-    if (wallpaper.superview != container || container.subviews.firstObject != wallpaper) {
-        [container insertSubview:wallpaper atIndex:0];
-    }
-    if (!CGRectEqualToRect(wallpaper.frame, container.bounds)) {
-        wallpaper.frame = container.bounds;
-    }
-
+static void UpdateWallpaperView(BHTWallpaperView* wallpaper) {
     UIColor* theme = ThemeBackgroundColor();
     if (![wallpaper.backgroundColor isEqual:theme]) {
         wallpaper.backgroundColor = theme;
@@ -223,61 +157,121 @@ static void UpdateWallpaper(UINavigationController* navigationController, BOOL f
     if (fabs(wallpaper.imageView.alpha - alpha) > 0.001) {
         wallpaper.imageView.alpha = alpha;
     }
+}
 
-    if (force || NeedsScreenPass(navigationController)) {
-        ClearScreens(container, navigationController.navigationBar);
+static void RemoveListWallpaper(UIScrollView* list) {
+    BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
+    if (!wallpaper) {
+        return;
     }
+    if (ListBackgroundView(list) == wallpaper) {
+        id original = objc_getAssociatedObject(list, ListOriginalBackgroundViewKey);
+        SetListBackgroundView(list, [original isKindOfClass:UIView.class] ? original : nil);
+    }
+    objc_setAssociatedObject(list, ListWallpaperKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(list, ListOriginalBackgroundViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static BOOL ListHasWallpaper(UIScrollView* list) {
+    BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
+    return wallpaper && ListBackgroundView(list) == wallpaper;
+}
+
+// MARK: - Cells
+
+static void PrepareCell(UIView* cell, UIScrollView* list) {
+    if (!WallpaperOn || !ListHasWallpaper(list) || ![cell isKindOfClass:UIView.class]) {
+        return;
+    }
+
+    SEL hostGetter = @selector(hostProvidesBackground);
+    SEL hostSetter = @selector(setHostProvidesBackground:);
+    if ([cell respondsToSelector:hostSetter] && !BHTSafeBool(cell, hostGetter)) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(cell, hostSetter, YES);
+        [WeakSet(&HostChangedCellsStorage) addObject:cell];
+    }
+
+    ClearThemeBackground(cell);
+    UIView* contentView = [cell respondsToSelector:@selector(contentView)] ? [(id)cell contentView] : nil;
+    ClearThemeBackground(contentView);
+    ClearThemeBackground(nfb_objectIvar(cell, "_backgroundView"));
+
+    UIView* statusView = BHTSafeObject(cell, @selector(statusView));
+    if ([statusView isKindOfClass:UIView.class] && [statusView isDescendantOfView:cell]) {
+        for (UIView* view = statusView; view && view != cell; view = view.superview) {
+            ClearThemeBackground(view);
+        }
+    }
+}
+
+static void PrepareVisibleCells(UIScrollView* list) {
+    if (![list respondsToSelector:@selector(visibleCells)]) {
+        return;
+    }
+    for (UIView* cell in [(id)list visibleCells]) {
+        PrepareCell(cell, list);
+    }
+}
+
+// MARK: - Applying
+
+static void ApplyWallpaperToController(UIViewController* controller) {
+    if (!controller.isViewLoaded) {
+        return;
+    }
+    UIScrollView* list = ListOfController(controller);
+    if (!list) {
+        return;
+    }
+    if (!ControllerWantsWallpaper(controller, list)) {
+        RemoveListWallpaper(list);
+        return;
+    }
+
+    BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
+    if (!wallpaper) {
+        wallpaper = [[BHTWallpaperView alloc] initWithFrame:list.bounds];
+        objc_setAssociatedObject(list, ListWallpaperKey, wallpaper, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(list, ListOriginalBackgroundViewKey, ListBackgroundView(list) ?: NSNull.null,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    UpdateWallpaperView(wallpaper);
+    SetListBackgroundView(list, wallpaper);
+    [WeakSet(&WallpaperedListsStorage) addObject:list];
+    PrepareVisibleCells(list);
+}
+
+static void RestoreEverything(void) {
+    for (UIScrollView* list in WeakSet(&WallpaperedListsStorage).allObjects) {
+        RemoveListWallpaper(list);
+    }
+    [WeakSet(&WallpaperedListsStorage) removeAllObjects];
+
+    for (UIView* cell in WeakSet(&HostChangedCellsStorage).allObjects) {
+        if ([cell respondsToSelector:@selector(setHostProvidesBackground:)]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(cell, @selector(setHostProvidesBackground:), NO);
+        }
+    }
+    [WeakSet(&HostChangedCellsStorage) removeAllObjects];
+
+    for (UIView* view in WeakSet(&ClearedViewsStorage).allObjects) {
+        UIColor* original = objc_getAssociatedObject(view, OriginalBackgroundKey);
+        if (original && [view.backgroundColor isEqual:UIColor.clearColor]) {
+            view.backgroundColor = original;
+        }
+        objc_setAssociatedObject(view, OriginalBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [WeakSet(&ClearedViewsStorage) removeAllObjects];
 }
 
 static void ApplyWallpaperChange(void) {
     WallpaperOn = BHTWatermark.active;
-    WallpaperGeneration++;
     if (!WallpaperOn) {
-        RestoreClearedBackgrounds();
-    }
-    for (UINavigationController* controller in WallpaperedNavigationControllers().allObjects) {
-        UpdateWallpaper(controller, YES);
-    }
-}
-
-%hook T1TabNavigationController
-
-- (void)viewDidLayoutSubviews {
-    %orig;
-    [WallpaperedNavigationControllers() addObject:(UINavigationController*)self];
-    UpdateWallpaper((UINavigationController*)self, NO);
-}
-
-%end
-
-// MARK: - Timelines shown later
-
-// A timeline that appears after the tab last laid out (a Home tab switched
-// to, a page loaded late) clears itself and the screens holding it.
-static void ClearDataViewController(UIViewController* controller) {
-    if (!WallpaperOn || !controller.isViewLoaded) {
+        RestoreEverything();
         return;
     }
-
-    UINavigationController* navigationController = controller.navigationController;
-    if (![WallpaperedNavigationControllers() containsObject:navigationController]) {
-        return;
-    }
-    UIView* container = navigationController.view;
-    ClearScreens(container, navigationController.navigationBar);
-
-    for (NSString* name in @[@"tableView", @"collectionView"]) {
-        id list = BHTSafeObject(controller, NSSelectorFromString(name));
-        if ([list isKindOfClass:UIView.class] && IsList(list)) {
-            ClearList(list, container);
-        }
-    }
-    for (UIView* view = controller.view; view && view != container; view = view.superview) {
-        if (IsList(view)) {
-            ClearList(view, container);
-        } else if (IsFullHeight(view, container)) {
-            ClearThemeBackground(view);
-        }
+    for (UIViewController* controller in WeakSet(&SeenControllersStorage).allObjects) {
+        ApplyWallpaperToController(controller);
     }
 }
 
@@ -285,75 +279,27 @@ static void ClearDataViewController(UIViewController* controller) {
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    ClearDataViewController((UIViewController*)self);
-}
-
-%end
-
-// MARK: - Cells
-
-static BOOL CellIsInWallpaperedList(UIView* cell) {
-    UIView* list = cell.superview;
-    for (NSUInteger depth = 0; list && depth < 2; depth++, list = list.superview) {
-        NSNumber* generation = objc_getAssociatedObject(list, WallpaperListKey);
-        if (generation.unsignedIntegerValue == WallpaperGeneration) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-// The cell and its content view every time (X recolors them on reuse), and
-// once per change a few levels below, where a status view may paint the
-// row's background itself.
-static void ClearCell(UIView* cell, UIView* contentView, UIView* backgroundView) {
-    if (!WallpaperOn || !CellIsInWallpaperedList(cell)) {
-        return;
-    }
-
-    ClearThemeBackground(cell);
-    ClearThemeBackground(contentView);
-    ClearThemeBackground(backgroundView);
-
-    NSNumber* done = objc_getAssociatedObject(cell, WallpaperCellKey);
-    UIView* statusView = BHTSafeObject(cell, @selector(statusView));
-    if ([statusView isKindOfClass:UIView.class]) {
-        for (UIView* view = statusView; view && view != cell; view = view.superview) {
-            ClearThemeBackground(view);
-        }
-    }
-    if (done.unsignedIntegerValue == WallpaperGeneration) {
-        return;
-    }
-    objc_setAssociatedObject(cell, WallpaperCellKey, @(WallpaperGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-
-    NSMutableArray<UIView*>* queue = [contentView.subviews mutableCopy] ?: [NSMutableArray array];
-    for (NSUInteger i = 0; i < queue.count && i < 40; i++) {
-        UIView* view = queue[i];
-        ClearThemeBackground(view);
-        if (!IsList(view) && ![view isKindOfClass:UIImageView.class]) {
-            [queue addObjectsFromArray:view.subviews];
-        }
+    [WeakSet(&SeenControllersStorage) addObject:(UIViewController*)self];
+    if (WallpaperOn) {
+        ApplyWallpaperToController((UIViewController*)self);
     }
 }
 
-%hook UITableViewCell
-
-- (void)layoutSubviews {
+- (void)tableView:(UITableView*)tableView
+      willDisplayCell:(UITableViewCell*)cell
+    forRowAtIndexPath:(NSIndexPath*)indexPath {
     %orig;
     if (WallpaperOn) {
-        ClearCell(self, self.contentView, self.backgroundView);
+        PrepareCell(cell, tableView);
     }
 }
 
-%end
-
-%hook UICollectionViewCell
-
-- (void)layoutSubviews {
+- (void)collectionView:(UICollectionView*)collectionView
+       willDisplayCell:(UICollectionViewCell*)cell
+    forItemAtIndexPath:(NSIndexPath*)indexPath {
     %orig;
     if (WallpaperOn) {
-        ClearCell(self, self.contentView, self.backgroundView);
+        PrepareCell(cell, collectionView);
     }
 }
 

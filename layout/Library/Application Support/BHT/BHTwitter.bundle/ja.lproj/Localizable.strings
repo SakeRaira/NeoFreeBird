@@ -350,7 +350,7 @@
 "SIDEBAR_ITEMS_SHOW_ALL" = "すべて表示";
 
 "BACKGROUND_WATERMARK_TITLE" = "壁紙を設定";
-"BACKGROUND_WATERMARK_DETAIL" = "選んだ画像を、タイムラインなどのタブの画面の背景に表示します。投稿やアイコンは画像の上に表示され、スクロールしても画像は動きません。";
+"BACKGROUND_WATERMARK_DETAIL" = "選んだ画像を、タイムラインやプロフィール、検索結果など投稿が並ぶ画面の背景に表示します。投稿やアイコンは画像の上に表示され、スクロールしても画像は動きません。";
 "WATERMARK_IMAGE_TITLE" = "画像";
 "WATERMARK_IMAGE_NONE" = "未設定";
 "WATERMARK_IMAGE_SET" = "設定済み";

@@ -3,7 +3,7 @@
 //  NeoFreeBird
 //
 //  A picture of the user's choosing shown as the wallpaper behind the app's
-//  tab screens (Watermark.x draws it). Stores the picture and how strongly it
+//  timelines (Watermark.x draws it). Stores the picture and how strongly it
 //  shows through the theme's background color.
 //
 
