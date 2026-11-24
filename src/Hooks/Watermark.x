@@ -64,6 +64,8 @@ static const void* TabBarWallpaperKey = &TabBarWallpaperKey;
 static const void* ScrollHoldsPieceKey = &ScrollHoldsPieceKey;
 static const void* StripPassKey = &StripPassKey;
 static const void* FadeAlphaKey = &FadeAlphaKey;
+static const void* FadeTransitionKey = &FadeTransitionKey;
+static const void* ScreenNormalAlphaKey = &ScreenNormalAlphaKey;
 static const void* KeepClearKey = &KeepClearKey;
 
 // Read on hot paths, so kept here instead of asking the settings.
@@ -1140,6 +1142,7 @@ static void ClearAllScreens(void) {
 
 static void ScheduleSettlePass(UIViewController* controller);
 static void ProcessThemedViews(BOOL beforeDrawing);
+static void EndFadesOf(UIViewController* controller, BOOL appearing);
 
 %hook UIViewController
 
@@ -1154,10 +1157,16 @@ static void ProcessThemedViews(BOOL beforeDrawing);
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
+    EndFadesOf(self, YES);
     if (FullOn) {
         ClearController(self, YES);
         ScheduleSettlePass(self);
     }
+}
+
+- (void)viewDidDisappear:(BOOL)animated {
+    %orig;
+    EndFadesOf(self, NO);
 }
 
 %end
@@ -1230,6 +1239,8 @@ static NSHashTable* FadingViewsStorage;
 static NSHashTable* FadingNavigationsStorage;
 // UIKit's shade views hidden during transitions.
 static NSHashTable* HiddenShadesStorage;
+// Screens that were ever faded (see ShowScreenAtNormalAlpha).
+static NSHashTable* FadedScreensStorage;
 
 // A view's own alpha while it fades, put back when the transition ends.
 static void RestoreFade(UIView* view) {
@@ -1238,6 +1249,7 @@ static void RestoreFade(UIView* view) {
         return;
     }
     objc_setAssociatedObject(view, FadeAlphaKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, FadeTransitionKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [WeakSet(&FadingViewsStorage) removeObject:view];
     [UIView performWithoutAnimation:^{
         view.alpha = original.doubleValue;
@@ -1321,15 +1333,28 @@ static void ShowShades(NSArray<UIView*>* shades) {
 static void FadeAlongside(UINavigationController* navigationController,
                           id<UIViewControllerTransitionCoordinator> coordinator, UIView* view, BOOL fadeIn,
                           UIView* fromView, UIView* toView) {
-    if (!view || objc_getAssociatedObject(view, FadeAlphaKey)) {
+    if (!view) {
         return;
     }
-    CGFloat original = view.alpha;
+    // Several pop calls can report the same transition: one fade each.
+    NSValue* transition = [NSValue valueWithPointer:(__bridge const void*)coordinator];
+    NSNumber* stored = objc_getAssociatedObject(view, FadeAlphaKey);
+    if (stored && [objc_getAssociatedObject(view, FadeTransitionKey) isEqual:transition]) {
+        return;
+    }
+    // A fade an earlier transition never undid keeps its real alpha, and this
+    // transition fades the view anyway.
+    CGFloat original = stored ? stored.doubleValue : view.alpha;
     // A view X keeps hidden this way is left to X.
     if (original < 0.01) {
         return;
     }
     objc_setAssociatedObject(view, FadeAlphaKey, @(original), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, FadeTransitionKey, transition, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if ([view.nextResponder isKindOfClass:UIViewController.class]) {
+        objc_setAssociatedObject(view, ScreenNormalAlphaKey, @(original), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [WeakSet(&FadedScreensStorage) addObject:view];
+    }
     [WeakSet(&FadingViewsStorage) addObject:view];
     [WeakSet(&FadingNavigationsStorage) addObject:navigationController];
     if (fadeIn) {
@@ -1398,6 +1423,48 @@ static void CrossFadeScreens(UINavigationController* navigationController) {
     }
 }
 
+// A screen has finished appearing or disappearing: its transition is over,
+// whatever the transition reported, so its fades (and its header strip's)
+// are undone. A screen that was ever faded and now appears gets its normal
+// alpha back even if something set it again after the fade ended, now and
+// once more right after (the transition may still be cleaning up), unless a
+// new transition is fading it by then.
+static void ShowScreenAtNormalAlpha(UIView* view) {
+    NSNumber* normal = objc_getAssociatedObject(view, ScreenNormalAlphaKey);
+    if (!normal || objc_getAssociatedObject(view, FadeAlphaKey)) {
+        return;
+    }
+    if (fabs(view.alpha - normal.doubleValue) > 0.01) {
+        [UIView performWithoutAnimation:^{
+            view.alpha = normal.doubleValue;
+        }];
+    }
+}
+
+static void EndFadesOf(UIViewController* controller, BOOL appearing) {
+    UIView* view = controller.viewIfLoaded;
+    if (!view) {
+        return;
+    }
+    if (WeakSet(&FadingViewsStorage).count > 0) {
+        RestoreFade(view);
+        UIView* accessory = HeaderAccessoryOf(controller);
+        if (accessory) {
+            RestoreFade(accessory);
+        }
+    }
+    if (appearing && objc_getAssociatedObject(view, ScreenNormalAlphaKey)) {
+        ShowScreenAtNormalAlpha(view);
+        __weak UIView* weakView = view;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIView* strongView = weakView;
+            if (strongView) {
+                ShowScreenAtNormalAlpha(strongView);
+            }
+        });
+    }
+}
+
 // Before each frame: once no navigation controller that started a fade is
 // moving any more (finished, cancelled, or a transition that never reported
 // its end), every fade is undone and every hidden shade shown again. Shades
@@ -1408,6 +1475,22 @@ static void SettleTransitions(void) {
             shade.hidden = NO;
             [WeakSet(&HiddenShadesStorage) removeObject:shade];
         }
+    }
+    // The screen on top of its navigation controller, with no fade running
+    // on it, is never left see-through.
+    for (UIView* screen in WeakSet(&FadedScreensStorage).allObjects) {
+        if (!screen.window || objc_getAssociatedObject(screen, FadeAlphaKey)) {
+            continue;
+        }
+        UIViewController* controller = (UIViewController*)screen.nextResponder;
+        if (![controller isKindOfClass:UIViewController.class]) {
+            continue;
+        }
+        UINavigationController* navigationController = controller.navigationController;
+        if (navigationController && navigationController.topViewController != controller) {
+            continue;
+        }
+        ShowScreenAtNormalAlpha(screen);
     }
     NSHashTable* fading = WeakSet(&FadingViewsStorage);
     if (fading.count == 0) {
