@@ -14,9 +14,9 @@
 //  in the theme's background color made clear, so the picture shows through
 //  and nothing has to follow anything: scrolling, paging between tabs and
 //  screens moving all happen over a picture that doesn't move.
-//   - The backs: the tab bar controller's view, each sheet or modal (it
-//     carries its own as it slides up), otherwise the view under the root,
-//     behind both the sidebar and the main content.
+//   - The backs: each sheet or modal (it carries its own as it slides up),
+//     otherwise the view under the root, behind the sidebar, the main
+//     content and the tab bar.
 //   - The sidebar waits behind the main content; with the content clear it
 //     would show through, so it's faded out and fades in with how far it's
 //     open (and back out as it closes).
@@ -26,8 +26,10 @@
 //     back so it lines up. They hardly move; one inside a scrolling list (a
 //     profile's sticky strip) is lined up as the list scrolls.
 //   - Opening or closing a screen slides the new one over the old; with both
-//     clear the old one would show through, so it fades out alongside the
-//     slide (UIKit runs the fade with the slide, swipes back included).
+//     clear they'd show at once, so they cross-fade alongside the slide
+//     (UIKit runs the fades with the slide, swipes back included), without
+//     UIKit's dark veil over the one underneath.
+//   - Views made clear stay clear when X sets their color again.
 //
 //  "Header and tab bar": just those parts, over the normal app.
 //
@@ -57,6 +59,8 @@ static const void* BarPassKey = &BarPassKey;
 static const void* TabBarWallpaperKey = &TabBarWallpaperKey;
 static const void* ScrollHoldsPieceKey = &ScrollHoldsPieceKey;
 static const void* StripPassKey = &StripPassKey;
+static const void* FadeAlphaKey = &FadeAlphaKey;
+static const void* KeepClearKey = &KeepClearKey;
 
 // Read on hot paths, so kept here instead of asking the settings.
 static BOOL WallpaperOn;
@@ -163,6 +167,7 @@ static BOOL ClearThemeColor(UIView* view, CGFloat minAlpha) {
     }
     objc_setAssociatedObject(view, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(view, LayerBackgroundKey, layerOnly ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, KeepClearKey, @(Generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [WeakSet(&ClearedViewsStorage) addObject:view];
     if (layerOnly) {
         view.layer.backgroundColor = UIColor.clearColor.CGColor;
@@ -176,8 +181,31 @@ static BOOL ClearThemeBackground(UIView* view) {
     return ClearThemeColor(view, 0.85);
 }
 
+// A view made clear in the current generation.
+static BOOL KeepsClear(UIView* view) {
+    NSNumber* generation = objc_getAssociatedObject(view, KeepClearKey);
+    return generation && generation.unsignedIntegerValue == Generation;
+}
+
+// X sets a view's color again when it restyles it (coming back to a screen
+// or a tab, the app returning to the foreground, the sidebar closing). A
+// view made clear stays clear, in the same pass, so it never flashes back.
+%hook UIView
+
+- (void)setBackgroundColor:(UIColor*)color {
+    if (WallpaperOn && color && KeepsClear(self) && ColorMatchesTheme(color, self, 0.5)) {
+        objc_setAssociatedObject(self, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        %orig(UIColor.clearColor);
+        return;
+    }
+    %orig;
+}
+
+%end
+
 static void RestoreClearedViews(void) {
     for (UIView* view in WeakSet(&ClearedViewsStorage).allObjects) {
+        objc_setAssociatedObject(view, KeepClearKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIColor* original = objc_getAssociatedObject(view, OriginalBackgroundKey);
         if (objc_getAssociatedObject(view, LayerBackgroundKey)) {
             CGColorRef current = view.layer.backgroundColor;
@@ -213,33 +241,23 @@ static void ClearThemeBackgroundsInside(UIView* root) {
 // MARK: - Alignment
 
 // What the picture is laid out against, the size of the window and anchored
-// at its top left: the tab bar controller's view, a sheet or modal's own view
-// (it slides as one piece), otherwise the nearest view directly under the
-// root view or the window: one back behind both the sidebar and the main
-// content.
+// at its top left: a sheet or modal's own view (it slides as one piece),
+// otherwise the nearest view directly under the root view or the window: one
+// back behind the sidebar, the main content and the tab bar.
 static UIView* AlignmentReference(UIView* view) {
     UIWindow* window = view.window;
     if (!window) {
         return nil;
     }
-    static Class tabBarControllerClass;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        tabBarControllerClass = objc_getClass("T1TabBarViewController");
-    });
     UIView* rootView = window.rootViewController.viewIfLoaded;
     UIView* fallback = nil;
     for (UIView* ancestor = view; ancestor && ancestor != window; ancestor = ancestor.superview) {
         UIResponder* responder = ancestor.nextResponder;
         if ([responder isKindOfClass:UIViewController.class]) {
             UIViewController* controller = (UIViewController*)responder;
-            if (controller.viewIfLoaded == ancestor) {
-                if (tabBarControllerClass && [controller isKindOfClass:tabBarControllerClass]) {
-                    return ancestor;
-                }
-                if (controller.presentingViewController && !controller.parentViewController) {
-                    return ancestor;
-                }
+            if (controller.viewIfLoaded == ancestor && controller.presentingViewController &&
+                !controller.parentViewController) {
+                return ancestor;
             }
         }
         if (!fallback && (ancestor.superview == rootView || ancestor.superview == window)) {
@@ -249,8 +267,8 @@ static UIView* AlignmentReference(UIView* view) {
     return fallback ?: window;
 }
 
-// Where the picture goes in `view`'s coordinates. `reference` overrides the
-// lookup (the tab bar, which isn't inside the main content but moves with it).
+// Where the picture goes in `view`'s coordinates. `reference`, when given,
+// overrides the lookup.
 static CGRect PictureFrameFor(UIView* view, UIView* reference) {
     UIWindow* window = view.window;
     if (!reference || reference.window != window) {
@@ -988,6 +1006,7 @@ static BOOL MakeListClear(UIScrollView* list) {
         if (!cleared) {
             // Slightly translucent theme colors under the clearing bar.
             objc_setAssociatedObject(list, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(list, KeepClearKey, @(Generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [WeakSet(&ClearedViewsStorage) addObject:list];
             list.backgroundColor = UIColor.clearColor;
             cleared = YES;
@@ -1057,6 +1076,7 @@ static void ClearAllScreens(void) {
 }
 
 static void ScheduleSettlePass(UIViewController* controller);
+static void RecoverFadedScreen(UIViewController* controller);
 
 %hook UIViewController
 
@@ -1069,6 +1089,7 @@ static void ScheduleSettlePass(UIViewController* controller);
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
+    RecoverFadedScreen(self);
     if (FullOn) {
         ClearController(self, YES);
         ScheduleSettlePass(self);
@@ -1133,10 +1154,91 @@ static void ScheduleSettlePass(UIViewController* controller);
 // MARK: - Opening and closing screens
 
 // A new screen slides in over the old one (or the old one slides off over
-// the one below). With clear screens the one underneath would show through,
-// so it fades out alongside the slide; UIKit runs the fade with the slide,
-// interactive swipes back (and cancelled ones) included.
-static void FadeOutgoingScreen(UINavigationController* navigationController) {
+// the one below). With clear screens both would show at once, so they
+// cross-fade alongside the slide: the one leaving fades out, the one coming
+// in fades in. UIKit runs the fades with the slide, so an interactive swipe
+// back fades with the finger, and a cancelled one fades back.
+
+// A screen's own alpha while it fades, put back when the transition ends.
+static void RestoreFade(UIView* view) {
+    NSNumber* original = objc_getAssociatedObject(view, FadeAlphaKey);
+    if (!original) {
+        return;
+    }
+    objc_setAssociatedObject(view, FadeAlphaKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [UIView performWithoutAnimation:^{
+        view.alpha = original.doubleValue;
+    }];
+}
+
+// UIKit darkens the screen underneath while another slides over it, and
+// shades the moving screen's edge. Over clear screens that shows as a dark
+// veil on the wallpaper, so those views (which only live for the
+// transition) are hidden. The screens themselves are never touched.
+static BOOL IsDarkShade(UIView* view) {
+    UIColor* color = view.backgroundColor;
+    if (!color) {
+        return NO;
+    }
+    CGFloat red = 1, green = 1, blue = 1, alpha = 0;
+    if (![color getRed:&red green:&green blue:&blue alpha:&alpha]) {
+        CGFloat white = 1;
+        if (![color getWhite:&white alpha:&alpha]) {
+            return NO;
+        }
+        red = green = blue = white;
+    }
+    return alpha > 0 && red < 0.2 && green < 0.2 && blue < 0.2;
+}
+
+static void HideTransitionDimming(UIView* container, UIView* fromView, UIView* toView) {
+    NSMutableArray<UIView*>* queue = [container.subviews mutableCopy] ?: [NSMutableArray array];
+    for (NSUInteger i = 0; i < queue.count && i < 40; i++) {
+        UIView* view = queue[i];
+        if (view == fromView || view == toView || [view isKindOfClass:BHTWallpaperView.class] ||
+            [view.nextResponder isKindOfClass:UIViewController.class]) {
+            continue;
+        }
+        NSString* name = NSStringFromClass(view.class);
+        BOOL shading = [name containsString:@"Dimming"] || [name containsString:@"Shadow"];
+        BOOL holdsScreen = (fromView && [fromView isDescendantOfView:view]) || (toView && [toView isDescendantOfView:view]);
+        if (holdsScreen) {
+            // UIKit's dimming view wraps the screen: its shade is beside it.
+            [queue addObjectsFromArray:view.subviews];
+            continue;
+        }
+        BOOL insideShading = [NSStringFromClass(view.superview.class) containsString:@"Dimming"];
+        if (shading || insideShading || (view.subviews.count == 0 && IsDarkShade(view))) {
+            view.hidden = YES;
+        }
+    }
+}
+
+// Fades `view` in (from clear) or out alongside the transition, once per
+// transition even when several pop calls report the same one.
+static void FadeAlongside(id<UIViewControllerTransitionCoordinator> coordinator, UIView* view, BOOL fadeIn,
+                          UIView* fromView, UIView* toView) {
+    if (!view || objc_getAssociatedObject(view, FadeAlphaKey)) {
+        return;
+    }
+    CGFloat original = view.alpha;
+    objc_setAssociatedObject(view, FadeAlphaKey, @(original), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (fadeIn) {
+        [UIView performWithoutAnimation:^{
+            view.alpha = 0;
+        }];
+    }
+    [coordinator
+        animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+            HideTransitionDimming(context.containerView, fromView, toView);
+            view.alpha = fadeIn ? original : 0;
+        }
+        completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+            RestoreFade(view);
+        }];
+}
+
+static void CrossFadeScreens(UINavigationController* navigationController) {
     if (!FullOn) {
         return;
     }
@@ -1144,19 +1246,33 @@ static void FadeOutgoingScreen(UINavigationController* navigationController) {
     if (!coordinator || !coordinator.isAnimated) {
         return;
     }
-    UIViewController* from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
-    UIView* fromView = from.viewIfLoaded;
+    UIView* fromView = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey].viewIfLoaded;
+    UIView* toView = [coordinator viewControllerForKey:UITransitionContextToViewControllerKey].viewIfLoaded;
     if (!fromView || !IsAppWindow(fromView.window)) {
         return;
     }
-    CGFloat originalAlpha = fromView.alpha;
-    [coordinator
-        animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
-            fromView.alpha = 0;
+    FadeAlongside(coordinator, fromView, NO, fromView, toView);
+    if (toView && toView != fromView) {
+        FadeAlongside(coordinator, toView, YES, fromView, toView);
+    }
+}
+
+// A screen left mid-fade (a transition that never reported its end) gets its
+// alpha back once it's on screen with nothing moving.
+static void RecoverFadedScreen(UIViewController* controller) {
+    UIView* view = controller.viewIfLoaded;
+    if (!view || !objc_getAssociatedObject(view, FadeAlphaKey)) {
+        return;
+    }
+    __weak UIViewController* weakController = controller;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController* strongController = weakController;
+        UIView* strongView = strongController.viewIfLoaded;
+        if (strongView && !strongController.transitionCoordinator &&
+            !strongController.navigationController.transitionCoordinator) {
+            RestoreFade(strongView);
         }
-        completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
-            fromView.alpha = originalAlpha;
-        }];
+    });
 }
 
 %hook UINavigationController
@@ -1164,14 +1280,14 @@ static void FadeOutgoingScreen(UINavigationController* navigationController) {
 - (void)pushViewController:(UIViewController*)viewController animated:(BOOL)animated {
     %orig;
     if (animated) {
-        FadeOutgoingScreen(self);
+        CrossFadeScreens(self);
     }
 }
 
 - (UIViewController*)popViewControllerAnimated:(BOOL)animated {
     UIViewController* popped = %orig;
     if (animated) {
-        FadeOutgoingScreen(self);
+        CrossFadeScreens(self);
     }
     return popped;
 }
@@ -1179,7 +1295,7 @@ static void FadeOutgoingScreen(UINavigationController* navigationController) {
 - (NSArray*)popToViewController:(UIViewController*)viewController animated:(BOOL)animated {
     NSArray* popped = %orig;
     if (animated) {
-        FadeOutgoingScreen(self);
+        CrossFadeScreens(self);
     }
     return popped;
 }
@@ -1187,7 +1303,7 @@ static void FadeOutgoingScreen(UINavigationController* navigationController) {
 - (NSArray*)popToRootViewControllerAnimated:(BOOL)animated {
     NSArray* popped = %orig;
     if (animated) {
-        FadeOutgoingScreen(self);
+        CrossFadeScreens(self);
     }
     return popped;
 }
@@ -1293,6 +1409,13 @@ static void ScheduleSettlePass(UIViewController* controller) {
     if (scheduled) {
         return;
     }
+    // Right after this pass (most of X's late coloring), then once more for
+    // what comes later.
+    dispatch_async(dispatch_get_main_queue(), ^{
+        for (UIViewController* settling in WeakSet(&SettlingControllersStorage).allObjects) {
+            SettleScreen(settling);
+        }
+    });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         NSArray<UIViewController*>* controllers = WeakSet(&SettlingControllersStorage).allObjects;
         [WeakSet(&SettlingControllersStorage) removeAllObjects];
@@ -1309,8 +1432,9 @@ static UIView* TabBarBackground(UIViewController* tabBarController) {
 
 // A part of the picture at the bottom of the tab bar's background view, below
 // anything in it (the icons may be), unless the view draws itself. It's laid
-// out against the tab bar controller's view: the tab bar isn't inside the main
-// content, and against itself it would show the top of the picture.
+// out against the same back as everything else (the tab bar controller's view
+// is only the bar's size, and against it the bar would show the top of the
+// picture).
 static void AttachTabBarWallpaper(UIViewController* tabBarController) {
     UIView* background = TabBarBackground(tabBarController);
     if (!background) {
@@ -1329,7 +1453,7 @@ static void AttachTabBarWallpaper(UIViewController* tabBarController) {
         slice.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         objc_setAssociatedObject(background, TabBarWallpaperKey, slice, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    slice.bht_reference = tabBarController.viewIfLoaded;
+    slice.bht_reference = nil;
     UpdateWallpaperView(slice);
     if (slice.superview != host || host.subviews.firstObject != slice) {
         [host insertSubview:slice atIndex:0];
@@ -1341,6 +1465,22 @@ static void AttachTabBarWallpaper(UIViewController* tabBarController) {
     [WeakSet(&TabBarBackgroundsStorage) addObject:background];
 }
 
+// Now and once X is done with this pass.
+static void RefreshTabBarWallpaper(UIViewController* tabBarController) {
+    if (!BarsOn) {
+        return;
+    }
+    [WeakSet(&SeenTabBarControllersStorage) addObject:tabBarController];
+    AttachTabBarWallpaper(tabBarController);
+    __weak UIViewController* weakController = tabBarController;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIViewController* controller = weakController;
+        if (controller && BarsOn) {
+            AttachTabBarWallpaper(controller);
+        }
+    });
+}
+
 static void RemoveTabBarWallpapers(void) {
     for (UIView* background in WeakSet(&TabBarBackgroundsStorage).allObjects) {
         [objc_getAssociatedObject(background, TabBarWallpaperKey) removeFromSuperview];
@@ -1349,6 +1489,8 @@ static void RemoveTabBarWallpapers(void) {
 }
 
 // MARK: - Sidebar
+
+static void ReapplyWallpaper(void);
 
 // X's split controller (the sidebar and the main content) and the sidebar's
 // view, recorded as they lay out.
@@ -1483,6 +1625,12 @@ static void SidebarMoved(UIViewController* split) {
 - (void)private_notifyDashDidSettleOpen:(BOOL)open {
     %orig;
     SidebarMoved((UIViewController*)self);
+    // X restyles the content as the sidebar settles: a full pass once it's done.
+    if (FullOn) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            ReapplyWallpaper();
+        });
+    }
 }
 
 %end
@@ -1517,6 +1665,18 @@ static void SidebarMoved(UIViewController* split) {
         AttachTabBarWallpaper((UIViewController*)self);
     }
     KeepMainBackInPlace(((UIViewController*)self).viewIfLoaded.window);
+}
+
+// X rebuilds the bar's background when the look changes (the app coming back
+// from the background, where iOS flips the look for its snapshots).
+- (void)_t1_updateBackground {
+    %orig;
+    RefreshTabBarWallpaper((UIViewController*)self);
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
+    %orig;
+    RefreshTabBarWallpaper((UIViewController*)self);
 }
 
 %end
@@ -1593,11 +1753,8 @@ static void ReadWallpaperOptions(void) {
     BarsOn = WallpaperOn && (FullOn || [BHTSettings boolForKey:kBarsKey]);
 }
 
-static void ApplyWallpaperChange(void) {
-    ReadWallpaperOptions();
-    Generation++;
-    // Start over, then add what the options ask for.
-    RestoreEverything();
+// Everything the options ask for, applied over what's there.
+static void ReapplyWallpaper(void) {
     UpdateSidebarFade(AppSplit);
     if (!WallpaperOn) {
         return;
@@ -1612,6 +1769,27 @@ static void ApplyWallpaperChange(void) {
     if (FullOn) {
         ClearAllScreens();
     }
+}
+
+static void ApplyWallpaperChange(void) {
+    ReadWallpaperOptions();
+    Generation++;
+    // Start over, then add what the options ask for.
+    RestoreEverything();
+    ReapplyWallpaper();
+}
+
+// X restyles the app as it comes back from the background (iOS flips the
+// look for its snapshots there): everything is applied again, now and once
+// X is done.
+static void ReapplyAfterForeground(void) {
+    if (!WallpaperOn) {
+        return;
+    }
+    ReapplyWallpaper();
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        ReapplyWallpaper();
+    });
 }
 
 %hook TFNItemsDataViewController
@@ -1657,5 +1835,11 @@ static void ApplyWallpaperChange(void) {
                                                      queue:NSOperationQueue.mainQueue
                                                 usingBlock:^(NSNotification* notification) {
                                                     ApplyWallpaperChange();
+                                                }];
+    [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification
+                                                    object:nil
+                                                     queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification* notification) {
+                                                    ReapplyAfterForeground();
                                                 }];
 }
