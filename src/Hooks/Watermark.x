@@ -2,145 +2,40 @@
 //  Watermark.x
 //  NeoFreeBird
 //
-//  Wallpaper: the chosen picture (BHTWatermark) behind the timelines, and
-//  optionally the bars and every screen. Every part of it is laid out against
-//  the app's main content, so all the parts line up as one picture and slide
-//  together with the sidebar; scrolling and screen slides keep it still (see
-//  "Swipes").
+//  Wallpaper: the chosen picture (BHTWatermark).
 //
-//  Timelines: each timeline list gets the picture as its backgroundView
-//  (drawn behind the cells, fixed while scrolling), and its cells are made
-//  clear. X's cells paint their own background through a private view of
-//  TFNTableViewCell; its hostProvidesBackground switch, made for lists that
-//  draw the background themselves, turns that off.
+//  Timelines (the base option): each timeline list in a tab gets the picture
+//  as its backgroundView (drawn behind the cells, fixed while scrolling), and
+//  its cells are made clear. X's cells paint their own background through a
+//  private view of TFNTableViewCell; its hostProvidesBackground switch, made
+//  for lists that draw the background themselves, turns that off.
 //
-//  Painting: instead of making a view transparent, the picture is painted in
-//  place of its theme background color, as a layer at the bottom of the view
-//  (the theme color, the picture over it at the chosen strength). The view
-//  stays opaque, so whatever is behind it stays hidden. Painted views that
-//  move (inside a scrolling list, a collapsing header) are lined up again as
-//  their list or bar lays out. Views that draw their own content are never
-//  painted, since a layer would cover it. UIKit's views are never reordered.
+//  "Every screen": one picture at the back, and everything above it painted
+//  in the theme's background color made clear, so the picture shows through
+//  and nothing has to follow anything: scrolling, paging between tabs and
+//  screens moving all happen over a picture that doesn't move.
+//   - The backs: the main content (the tab bar controller's view, which the
+//     sidebar slides as one piece, so the picture goes with it), the sidebar,
+//     and each sheet or modal (it carries its own as it slides up).
+//   - Only what content passes under can't be clear: the header, the tab
+//     strips (Following, All/Mentions, Top/Latest...) and the tab bar. They
+//     get their own part of the picture instead, laid out against the same
+//     back so it lines up. They hardly move; one inside a scrolling list (a
+//     profile's sticky strip) is lined up as the list scrolls.
+//   - Opening or closing a screen slides the new one over the old; with both
+//     clear the old one would show through, so it fades out alongside the
+//     slide (UIKit runs the fade with the slide, swipes back included).
 //
-//  Bars: the header is painted through all its layers; the tab bar gets a
-//  part of the picture at the bottom of its background view, below its icons.
+//  "Header and tab bar": just those parts, over the normal app.
 //
-//  Every screen: each screen is painted down through its views, and every
-//  large list in it gets the list treatment.
-//
-//  Every change is remembered and undone when switched off.
+//  Theme colors are cleared on views' backgrounds only (X also uses the color
+//  for text and outlines). Every change is remembered and undone when
+//  switched off. UIKit's views are never reordered; parts are layers.
 //
 
 #import <QuartzCore/QuartzCore.h>
 #import "HookHelpers.h"
 #import "Core/BHTWatermark.h"
-
-// MARK: - Alignment
-
-// What the picture is laid out against: the app's main content (the tab bar
-// controller's view), which slides as one piece when the sidebar opens, so
-// the picture slides with it. Outside it (the sidebar, sheets) the nearest
-// view directly under the root view or the window. The picture is the size of
-// the window, anchored at that view's top left.
-static UIView* AlignmentReference(UIView* view) {
-    UIWindow* window = view.window;
-    if (!window) {
-        return nil;
-    }
-    static Class tabBarControllerClass;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        tabBarControllerClass = objc_getClass("T1TabBarViewController");
-    });
-    UIView* rootView = window.rootViewController.viewIfLoaded;
-    UIView* fallback = nil;
-    for (UIView* ancestor = view; ancestor && ancestor != window; ancestor = ancestor.superview) {
-        if (tabBarControllerClass && [ancestor.nextResponder isKindOfClass:tabBarControllerClass]) {
-            return ancestor;
-        }
-        if (!fallback && (ancestor.superview == rootView || ancestor.superview == window)) {
-            fallback = ancestor;
-        }
-    }
-    return fallback ?: window;
-}
-
-// Where the picture goes in `view`'s coordinates, from the views' own frames
-// (where things settle). It's worked out during layout, in step with whatever
-// moved them, so scrolling keeps it still without lag; animated slides get a
-// counter-animation instead (below). `reference` overrides the lookup (the
-// tab bar, which isn't inside the main content but moves with it).
-static CGRect PictureFrameFor(UIView* view, UIView* reference) {
-    UIWindow* window = view.window;
-    if (!reference || reference.window != window) {
-        reference = AlignmentReference(view);
-    }
-    if (!window || !reference) {
-        return view.bounds;
-    }
-    CGRect picture = CGRectMake(0, 0, window.bounds.size.width, window.bounds.size.height);
-    return [view convertRect:picture fromView:reference];
-}
-
-@interface BHTWallpaperView : UIView
-@property (nonatomic, strong) UIImageView* imageView;
-@property (nonatomic, weak) UIView* bht_reference;
-- (void)bht_align;
-@end
-
-static NSHashTable* WallpaperViewsStorage;
-
-@implementation BHTWallpaperView
-
-- (instancetype)initWithFrame:(CGRect)frame {
-    if ((self = [super initWithFrame:frame])) {
-        self.userInteractionEnabled = NO;
-        self.isAccessibilityElement = NO;
-        self.accessibilityElementsHidden = YES;
-        self.clipsToBounds = YES;
-
-        _imageView = [[UIImageView alloc] initWithFrame:self.bounds];
-        _imageView.contentMode = UIViewContentModeScaleAspectFill;
-        [self addSubview:_imageView];
-
-        if (!WallpaperViewsStorage) {
-            WallpaperViewsStorage = [NSHashTable weakObjectsHashTable];
-        }
-        [WallpaperViewsStorage addObject:self];
-    }
-    return self;
-}
-
-- (void)bht_align {
-    if (!self.window) {
-        return;
-    }
-    CGRect frame = PictureFrameFor(self, self.bht_reference);
-    CGPoint origin = self.layer.bounds.origin;
-    frame = CGRectOffset(frame, -origin.x, -origin.y);
-    if (!CGRectEqualToRect(self.imageView.frame, frame)) {
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        self.imageView.frame = frame;
-        [CATransaction commit];
-    }
-}
-
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    [self bht_align];
-}
-
-- (void)didMoveToWindow {
-    [super didMoveToWindow];
-    [self setNeedsLayout];
-}
-
-- (UIView*)hitTest:(CGPoint)point withEvent:(UIEvent*)event {
-    return nil;
-}
-
-@end
 
 static NSString* const kBarsKey = @"background_watermark_bars";
 static NSString* const kFullKey = @"background_watermark_full";
@@ -149,7 +44,7 @@ static const void* ListWallpaperKey = &ListWallpaperKey;
 static const void* ListOriginalBackgroundViewKey = &ListOriginalBackgroundViewKey;
 static const void* OriginalBackgroundKey = &OriginalBackgroundKey;
 static const void* LayerBackgroundKey = &LayerBackgroundKey;
-static const void* ScreenWallpaperKey = &ScreenWallpaperKey;
+static const void* PieceKey = &PieceKey;
 static const void* ScreenPassKey = &ScreenPassKey;
 static const void* HostListKey = &HostListKey;
 static const void* ListExtrasPassKey = &ListExtrasPassKey;
@@ -157,13 +52,14 @@ static const void* CellPassKey = &CellPassKey;
 static const void* ListCheckKey = &ListCheckKey;
 static const void* BarPassKey = &BarPassKey;
 static const void* TabBarWallpaperKey = &TabBarWallpaperKey;
+static const void* ScrollHoldsPieceKey = &ScrollHoldsPieceKey;
 
 // Read on hot paths, so kept here instead of asking the settings.
 static BOOL WallpaperOn;
 static BOOL BarsOn;
 static BOOL FullOn;
 // Bumped on every change; marks from an older one are stale.
-static NSUInteger PaintGeneration = 1;
+static NSUInteger Generation = 1;
 
 static NSHashTable* WeakSet(NSHashTable* __strong* storage) {
     if (!*storage) {
@@ -178,10 +74,8 @@ static NSHashTable* HostChangedCellsStorage;
 static NSHashTable* ClearedViewsStorage;
 static NSHashTable* TabBarBackgroundsStorage;
 static NSHashTable* SeenTabBarControllersStorage;
-static NSHashTable* PaintedViewsStorage;
-
-// Defined with the swipe handling below.
-static void MarkScrollAncestors(UIView* view);
+static NSHashTable* PiecesStorage;
+static NSHashTable* WallpaperViewsStorage;
 
 static BOOL IsList(UIView* view) {
     return [view isKindOfClass:UITableView.class] || [view isKindOfClass:UICollectionView.class];
@@ -210,8 +104,7 @@ static UIColor* ThemeBackgroundColor(void) {
     return cached;
 }
 
-// The theme's background color, at least `minAlpha` opaque. Bars are often a
-// little translucent, so they're matched with a lower bar than screens.
+// The theme's background color, at least `minAlpha` opaque.
 static BOOL ColorMatchesTheme(UIColor* color, UIView* view, CGFloat minAlpha) {
     if (!color) {
         return NO;
@@ -247,21 +140,21 @@ static UIColor* EffectiveBackgroundColor(UIView* view) {
     return color;
 }
 
-// MARK: - Making views clear (cells)
+// MARK: - Making views clear
 
-static void ClearThemeBackground(UIView* view) {
+// YES when the view was in the theme color and is now clear.
+static BOOL ClearThemeBackground(UIView* view) {
     if (![view isKindOfClass:UIView.class]) {
-        return;
+        return NO;
     }
     UIColor* color = view.backgroundColor;
     BOOL layerOnly = NO;
-    // Some views color their layer directly, leaving the view's color unset.
     if (!color && view.layer.backgroundColor) {
         color = [UIColor colorWithCGColor:view.layer.backgroundColor];
         layerOnly = YES;
     }
     if (!ColorIsThemeBackground(color, view)) {
-        return;
+        return NO;
     }
     objc_setAssociatedObject(view, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(view, LayerBackgroundKey, layerOnly ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -271,6 +164,7 @@ static void ClearThemeBackground(UIView* view) {
     } else {
         view.backgroundColor = UIColor.clearColor;
     }
+    return YES;
 }
 
 static void RestoreClearedViews(void) {
@@ -298,9 +192,6 @@ static void ClearThemeBackgroundsInside(UIView* root) {
     NSMutableArray<UIView*>* queue = [root.subviews mutableCopy] ?: [NSMutableArray array];
     for (NSUInteger i = 0; i < queue.count && i < 150; i++) {
         UIView* view = queue[i];
-        if (view.hidden) {
-            continue;
-        }
         ClearThemeBackground(view);
         if ([view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class] ||
             [view isKindOfClass:UIScrollView.class] || [view isKindOfClass:UITextView.class]) {
@@ -310,7 +201,133 @@ static void ClearThemeBackgroundsInside(UIView* root) {
     }
 }
 
-// MARK: - Painting
+// MARK: - Alignment
+
+// What the picture is laid out against, the size of the window and anchored
+// at its top left: a sheet or modal's own view (it slides as one piece), the
+// main content (the tab bar controller's view, which the sidebar slides as
+// one piece), otherwise the nearest view directly under the root view or the
+// window (the sidebar).
+static UIView* AlignmentReference(UIView* view) {
+    UIWindow* window = view.window;
+    if (!window) {
+        return nil;
+    }
+    static Class tabBarControllerClass;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        tabBarControllerClass = objc_getClass("T1TabBarViewController");
+    });
+    UIView* rootView = window.rootViewController.viewIfLoaded;
+    UIView* fallback = nil;
+    for (UIView* ancestor = view; ancestor && ancestor != window; ancestor = ancestor.superview) {
+        UIResponder* responder = ancestor.nextResponder;
+        if ([responder isKindOfClass:UIViewController.class]) {
+            UIViewController* controller = (UIViewController*)responder;
+            if (controller.viewIfLoaded == ancestor) {
+                if (tabBarControllerClass && [controller isKindOfClass:tabBarControllerClass]) {
+                    return ancestor;
+                }
+                if (controller.presentingViewController && !controller.parentViewController) {
+                    return ancestor;
+                }
+            }
+        }
+        if (!fallback && (ancestor.superview == rootView || ancestor.superview == window)) {
+            fallback = ancestor;
+        }
+    }
+    return fallback ?: window;
+}
+
+// Where the picture goes in `view`'s coordinates. `reference` overrides the
+// lookup (the tab bar, which isn't inside the main content but moves with it).
+static CGRect PictureFrameFor(UIView* view, UIView* reference) {
+    UIWindow* window = view.window;
+    if (!reference || reference.window != window) {
+        reference = AlignmentReference(view);
+    }
+    if (!window || !reference) {
+        return view.bounds;
+    }
+    CGRect picture = CGRectMake(0, 0, window.bounds.size.width, window.bounds.size.height);
+    return [view convertRect:picture fromView:reference];
+}
+
+// MARK: - Wallpaper views (timeline lists, the tab bar)
+
+@interface BHTWallpaperView : UIView
+@property (nonatomic, strong) UIImageView* imageView;
+@property (nonatomic, weak) UIView* bht_reference;
+- (void)bht_align;
+@end
+
+@implementation BHTWallpaperView
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    if ((self = [super initWithFrame:frame])) {
+        self.userInteractionEnabled = NO;
+        self.isAccessibilityElement = NO;
+        self.accessibilityElementsHidden = YES;
+        self.clipsToBounds = YES;
+
+        _imageView = [[UIImageView alloc] initWithFrame:self.bounds];
+        _imageView.contentMode = UIViewContentModeScaleAspectFill;
+        [self addSubview:_imageView];
+        [WeakSet(&WallpaperViewsStorage) addObject:self];
+    }
+    return self;
+}
+
+- (void)bht_align {
+    if (!self.window) {
+        return;
+    }
+    CGRect frame = PictureFrameFor(self, self.bht_reference);
+    CGPoint origin = self.layer.bounds.origin;
+    frame = CGRectOffset(frame, -origin.x, -origin.y);
+    if (!CGRectEqualToRect(self.imageView.frame, frame)) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        self.imageView.frame = frame;
+        [CATransaction commit];
+    }
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self bht_align];
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    [self setNeedsLayout];
+}
+
+- (UIView*)hitTest:(CGPoint)point withEvent:(UIEvent*)event {
+    return nil;
+}
+
+@end
+
+static void UpdateWallpaperView(BHTWallpaperView* wallpaper) {
+    UIColor* theme = ThemeBackgroundColor();
+    if (![wallpaper.backgroundColor isEqual:theme]) {
+        wallpaper.backgroundColor = theme;
+    }
+    UIImage* image = BHTWatermark.image;
+    if (wallpaper.imageView.image != image) {
+        wallpaper.imageView.image = image;
+    }
+    CGFloat alpha = BHTWatermark.opacityPercent / 100.0;
+    if (fabs(wallpaper.imageView.alpha - alpha) > 0.001) {
+        wallpaper.imageView.alpha = alpha;
+    }
+}
+
+// MARK: - Picture parts (layers)
+
+static void MarkScrollAncestors(UIView* view);
 
 static NSDictionary* NoLayerAnimations(void) {
     static NSDictionary* actions;
@@ -355,10 +372,10 @@ static BOOL CanPaint(UIView* view, CGFloat minAlpha) {
     return ColorMatchesTheme(EffectiveBackgroundColor(view), view, minAlpha);
 }
 
-// The view's part of the picture: a clipping layer in the theme color,
-// holding the picture laid out against the window.
-static CALayer* PaintLayer(UIView* view, BOOL create) {
-    CALayer* container = objc_getAssociatedObject(view, ScreenWallpaperKey);
+// A view's part of the picture: a clipping layer in the theme color at the
+// bottom of the view, holding the picture laid out against the view's back.
+static CALayer* PieceLayer(UIView* view, BOOL create) {
+    CALayer* container = objc_getAssociatedObject(view, PieceKey);
     if (container || !create) {
         return container;
     }
@@ -370,17 +387,16 @@ static CALayer* PaintLayer(UIView* view, BOOL create) {
     picture.contentsGravity = kCAGravityResizeAspectFill;
     picture.actions = NoLayerAnimations();
     [container addSublayer:picture];
-    objc_setAssociatedObject(view, ScreenWallpaperKey, container, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, PieceKey, container, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return container;
 }
 
-// Puts a painted view's layer back in place and lines its picture up with the
-// window. Only touches what changed.
-static void AlignPaintedView(UIView* view) {
-    CALayer* container = PaintLayer(view, NO);
-    UIWindow* window = view.window;
+// Puts a piece back at the bottom and lines its picture up. Only touches what
+// changed.
+static void AlignPiece(UIView* view) {
+    CALayer* container = PieceLayer(view, NO);
     CALayer* layer = view.layer;
-    if (!container || !window || container.superlayer != layer) {
+    if (!container || !view.window || container.superlayer != layer) {
         return;
     }
     [CATransaction begin];
@@ -391,6 +407,8 @@ static void AlignPaintedView(UIView* view) {
     if (!CGRectEqualToRect(container.frame, layer.bounds)) {
         container.frame = layer.bounds;
     }
+    container.cornerRadius = layer.cornerRadius;
+    container.maskedCorners = layer.maskedCorners;
     CALayer* picture = container.sublayers.firstObject;
     // In the container's coordinates, which start at the layer's bounds origin.
     CGRect frame = PictureFrameFor(view, nil);
@@ -401,22 +419,19 @@ static void AlignPaintedView(UIView* view) {
     [CATransaction commit];
 }
 
-static void PaintView(UIView* view) {
+static void PaintPiece(UIView* view) {
     UIImage* image = BHTWatermark.image;
     if (!view.window || !image) {
         return;
     }
-    CALayer* container = PaintLayer(view, YES);
+    CALayer* container = PieceLayer(view, YES);
     CALayer* picture = container.sublayers.firstObject;
-    CALayer* layer = view.layer;
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
-    if (container.superlayer != layer) {
-        [layer insertSublayer:container atIndex:0];
+    if (container.superlayer != view.layer) {
+        [view.layer insertSublayer:container atIndex:0];
     }
-    container.cornerRadius = layer.cornerRadius;
-    container.maskedCorners = layer.maskedCorners;
     CGColorRef theme = [ThemeBackgroundColor() resolvedColorWithTraitCollection:view.traitCollection].CGColor;
     if (!CGColorEqualToColor(container.backgroundColor, theme)) {
         container.backgroundColor = theme;
@@ -432,36 +447,65 @@ static void PaintView(UIView* view) {
     }
     [CATransaction commit];
 
-    [WeakSet(&PaintedViewsStorage) addObject:view];
+    [WeakSet(&PiecesStorage) addObject:view];
     MarkScrollAncestors(view);
-    AlignPaintedView(view);
+    AlignPiece(view);
 }
 
-// Lines up every painted view and wallpaper view in a window again; called as
-// lists scroll and bars and screens lay out. Parts that move with the content
-// (the sidebar sliding it) don't change, since they're laid out against it.
-static void RealignPaintedViews(UIWindow* window) {
+// Lines every part in a window up again; parts only move with layout (a
+// collapsing header, a sticky strip in a scrolling list).
+static void RealignPieces(UIWindow* window) {
     if (!window) {
         return;
     }
-    for (UIView* view in WeakSet(&PaintedViewsStorage).allObjects) {
+    for (UIView* view in WeakSet(&PiecesStorage).allObjects) {
         if (view.window == window) {
-            AlignPaintedView(view);
+            AlignPiece(view);
         }
     }
-    for (BHTWallpaperView* wallpaper in WallpaperViewsStorage.allObjects) {
+    for (BHTWallpaperView* wallpaper in WeakSet(&WallpaperViewsStorage).allObjects) {
         if (wallpaper.window == window) {
             [wallpaper bht_align];
         }
     }
 }
 
-static void RemovePaintedViews(void) {
-    for (UIView* view in WeakSet(&PaintedViewsStorage).allObjects) {
-        [PaintLayer(view, NO) removeFromSuperlayer];
+static void RemovePieces(void) {
+    for (UIView* view in WeakSet(&PiecesStorage).allObjects) {
+        [PieceLayer(view, NO) removeFromSuperlayer];
     }
-    [WeakSet(&PaintedViewsStorage) removeAllObjects];
+    [WeakSet(&PiecesStorage) removeAllObjects];
 }
+
+// A part inside a scroll view is lined up again as it scrolls, in the same
+// pass, so it keeps still without lag.
+static void MarkScrollAncestors(UIView* view) {
+    for (UIView* ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
+        if ([ancestor isKindOfClass:UIScrollView.class] && !objc_getAssociatedObject(ancestor, ScrollHoldsPieceKey)) {
+            objc_setAssociatedObject(ancestor, ScrollHoldsPieceKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+    }
+}
+
+static void ScrollViewMoved(UIScrollView* scrollView) {
+    if (BarsOn && objc_getAssociatedObject(scrollView, ScrollHoldsPieceKey)) {
+        RealignPieces(scrollView.window);
+    }
+}
+
+%hook UIScrollView
+
+- (void)setContentOffset:(CGPoint)offset {
+    %orig;
+    ScrollViewMoved(self);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    ScrollViewMoved(self);
+}
+
+%end
 
 // MARK: - Lists
 
@@ -485,21 +529,6 @@ static void SetListBackgroundView(UIScrollView* list, UIView* view) {
     }
 }
 
-static void UpdateWallpaperView(BHTWallpaperView* wallpaper) {
-    UIColor* theme = ThemeBackgroundColor();
-    if (![wallpaper.backgroundColor isEqual:theme]) {
-        wallpaper.backgroundColor = theme;
-    }
-    UIImage* image = BHTWatermark.image;
-    if (wallpaper.imageView.image != image) {
-        wallpaper.imageView.image = image;
-    }
-    CGFloat alpha = BHTWatermark.opacityPercent / 100.0;
-    if (fabs(wallpaper.imageView.alpha - alpha) > 0.001) {
-        wallpaper.imageView.alpha = alpha;
-    }
-}
-
 static void RemoveListWallpaper(UIScrollView* list) {
     BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
     if (!wallpaper) {
@@ -518,7 +547,7 @@ static BOOL ListHasWallpaper(UIScrollView* list) {
     return wallpaper && ListBackgroundView(list) == wallpaper;
 }
 
-// Gives a list the picture as its backgroundView (kept fixed while it scrolls).
+// The timeline option: the picture as the list's backgroundView.
 static void ApplyListWallpaper(UIScrollView* list) {
     BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
     if (!wallpaper) {
@@ -530,14 +559,12 @@ static void ApplyListWallpaper(UIScrollView* list) {
     UpdateWallpaperView(wallpaper);
     SetListBackgroundView(list, wallpaper);
     [WeakSet(&WallpaperedListsStorage) addObject:list];
-    // Pagers holding this list keep its picture still while they page.
-    MarkScrollAncestors(list);
 }
 
-// A list taken over in "every screen" mode, in the current generation.
+// A list made clear in "every screen" mode, in the current generation.
 static BOOL IsHostList(UIScrollView* list) {
     NSNumber* generation = objc_getAssociatedObject(list, HostListKey);
-    return generation && generation.unsignedIntegerValue == PaintGeneration;
+    return generation && generation.unsignedIntegerValue == Generation;
 }
 
 // MARK: - Cells
@@ -552,7 +579,6 @@ static void PrepareCellSurface(UIView* cell) {
         ((void (*)(id, SEL, BOOL))objc_msgSend)(cell, hostSetter, YES);
         [WeakSet(&HostChangedCellsStorage) addObject:cell];
     }
-
     ClearThemeBackground(cell);
     ClearThemeBackground([cell respondsToSelector:@selector(contentView)] ? [(id)cell contentView] : nil);
     ClearThemeBackground([cell respondsToSelector:@selector(backgroundView)] ? [(id)cell backgroundView] : nil);
@@ -562,7 +588,6 @@ static void PrepareCellSurface(UIView* cell) {
 static void PrepareCellContents(UIView* cell) {
     PrepareCellSurface(cell);
     UIView* contentView = [cell respondsToSelector:@selector(contentView)] ? [(id)cell contentView] : nil;
-
     UIView* statusView = BHTSafeObject(cell, @selector(statusView));
     if ([statusView isKindOfClass:UIView.class] && [statusView isDescendantOfView:cell]) {
         ClearThemeBackgroundsInside(statusView);
@@ -580,18 +605,18 @@ static void PrepareCell(UIView* cell, UIScrollView* list) {
         return;
     }
     PrepareCellContents(cell);
-    objc_setAssociatedObject(cell, CellPassKey, @(PaintGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(cell, CellPassKey, @(Generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-// From a host list's layout: the surface every time, the inside once per cell
-// until it's reused.
+// From a clear list's layout: the surface every time, the inside once per
+// cell until it's reused.
 static void PrepareCellOnce(UIView* cell) {
     NSNumber* pass = objc_getAssociatedObject(cell, CellPassKey);
-    if (pass && pass.unsignedIntegerValue == PaintGeneration) {
+    if (pass && pass.unsignedIntegerValue == Generation) {
         PrepareCellSurface(cell);
         return;
     }
-    objc_setAssociatedObject(cell, CellPassKey, @(PaintGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(cell, CellPassKey, @(Generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     PrepareCellContents(cell);
 }
 
@@ -604,53 +629,106 @@ static void PrepareVisibleCells(UIScrollView* list) {
     }
 }
 
-// MARK: - Trees
+// MARK: - Every screen: clear views over a back
 
-static void HostList(UIScrollView* list);
-
-// Paints the views under `root` painted in the theme's color. Lists get the
-// list treatment instead of being opened; pictures and text are not opened.
-static void PaintTree(UIView* root, NSUInteger limit, CGFloat minAlpha) {
-    if (!root) {
-        return;
+// The back a view shows through to: a part of the picture painted at the
+// bottom of its alignment reference.
+static void EnsureBack(UIView* view) {
+    UIView* back = AlignmentReference(view);
+    if (back && back != view.window && ![back isKindOfClass:UIScrollView.class]) {
+        PaintPiece(back);
     }
+}
+
+static Class TabStripClass(void) {
+    static Class stripClass;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        stripClass = objc_getClass("_TtC10TFNUISwift25LegacySegmentedTabBarView");
+    });
+    return stripClass;
+}
+
+// The tab bar's own views keep their look; it gets its part separately.
+static NSSet* TabBarViews(void) {
+    NSMutableSet* views = [NSMutableSet set];
+    for (UIViewController* controller in WeakSet(&SeenTabBarControllersStorage).allObjects) {
+        UIView* background = BHTSafeObject(controller, @selector(tabBarBackgroundView));
+        if ([background isKindOfClass:UIView.class] && background.superview) {
+            [views addObject:background.superview];
+        }
+    }
+    return views;
+}
+
+static BOOL MakeListClear(UIScrollView* list);
+
+// Makes the theme-colored views under `root` clear, except the tab strips,
+// which content passes under: those (and their short theme-colored
+// containers) get a part of the picture. Headers are left to the header code.
+// YES when anything was made clear.
+static BOOL ClearSubtree(UIView* root, NSUInteger limit) {
+    UIWindow* window = root.window;
+    if (!window) {
+        return NO;
+    }
+    Class stripClass = TabStripClass();
+    NSSet* tabBarViews = TabBarViews();
+
+    NSMutableArray<UIView*>* visited = [NSMutableArray array];
+    NSMutableArray<UIView*>* strips = [NSMutableArray array];
     NSMutableArray<UIView*>* queue = [NSMutableArray arrayWithObject:root];
     for (NSUInteger i = 0; i < queue.count && i < limit; i++) {
         UIView* view = queue[i];
-        if ([view isKindOfClass:BHTWallpaperView.class]) {
+        if ([view isKindOfClass:BHTWallpaperView.class] || [view isKindOfClass:UINavigationBar.class] ||
+            [tabBarViews containsObject:view]) {
             continue;
         }
-        if (IsList(view)) {
-            UIScrollView* list = (UIScrollView*)view;
-            HostList(list);
-            // Small lists (a tab strip's row of tabs) are made clear instead,
-            // showing the painted view they sit on.
-            if (FullOn && !IsHostList(list)) {
-                ClearThemeBackground(list);
-                for (UIView* cell in [(id)list visibleCells]) {
-                    ClearThemeBackground(cell);
-                    ClearThemeBackground([(id)cell contentView]);
-                }
-            }
+        [visited addObject:view];
+        if (stripClass && [view isKindOfClass:stripClass]) {
+            [strips addObject:view];
+        }
+        if (IsList(view) || [view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class] ||
+            [view isKindOfClass:UITextView.class]) {
             continue;
         }
         if ([view isKindOfClass:UIVisualEffectView.class]) {
             [queue addObject:((UIVisualEffectView*)view).contentView];
             continue;
         }
-        if (CanPaint(view, minAlpha)) {
-            PaintView(view);
-        }
-        if ([view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class] ||
-            [view isKindOfClass:UITextView.class]) {
-            continue;
-        }
         [queue addObjectsFromArray:view.subviews];
     }
+
+    // A strip and its short containers.
+    NSHashTable* pieces = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+    CGFloat shortHeight = window.bounds.size.height * 0.25;
+    for (UIView* strip in strips) {
+        for (UIView* view = strip; view && view.bounds.size.height <= shortHeight; view = view.superview) {
+            [pieces addObject:view];
+            if (view == root) {
+                break;
+            }
+        }
+    }
+
+    BOOL cleared = NO;
+    for (UIView* view in visited) {
+        if ([pieces containsObject:view]) {
+            if (CanPaint(view, 0.5)) {
+                PaintPiece(view);
+            }
+            continue;
+        }
+        if (IsList(view)) {
+            cleared = MakeListClear((UIScrollView*)view) || cleared;
+            continue;
+        }
+        cleared = ClearThemeBackground(view) || cleared;
+    }
+    return cleared;
 }
 
-// Headers, sticky tab strips and empty states that live in a list beside its
-// cells.
+// Headers, sticky strips and empty states living in a list beside its cells.
 static NSUInteger ListExtrasCount(UIScrollView* list) {
     NSUInteger count = 0;
     for (UIView* subview in list.subviews) {
@@ -661,27 +739,23 @@ static NSUInteger ListExtrasCount(UIScrollView* list) {
     return count;
 }
 
-static void PaintListExtras(UIScrollView* list) {
-    UIView* background = ListBackgroundView(list);
+static void ClearListExtras(UIScrollView* list) {
+    BOOL cleared = NO;
     for (UIView* subview in [list.subviews copy]) {
         if ([subview isKindOfClass:UITableViewCell.class] || [subview isKindOfClass:UICollectionViewCell.class] ||
-            subview == background || [subview isKindOfClass:BHTWallpaperView.class]) {
+            [subview isKindOfClass:BHTWallpaperView.class]) {
             continue;
         }
-        PaintTree(subview, 80, 0.5);
+        cleared = ClearSubtree(subview, 80) || cleared;
+    }
+    if (cleared) {
+        EnsureBack(list);
     }
 }
 
-// Runs as a host list lays out, which is every frame while it scrolls: new
-// cells are made clear once, the extras painted when they change, and painted
-// views lined up again.
-static void ServiceHostList(UIScrollView* list, BOOL force) {
-    // Coming back to a screen, X can drop a list's background view; the
-    // picture goes back in. One X replaced with its own view is left alone.
-    BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
-    if (wallpaper && !ListBackgroundView(list)) {
-        SetListBackgroundView(list, wallpaper);
-    }
+// Runs as a clear list lays out (every frame while it scrolls): new cells are
+// made clear, the extras when they change.
+static void ServiceClearList(UIScrollView* list, BOOL force) {
     if ([list respondsToSelector:@selector(visibleCells)]) {
         for (UIView* cell in [(id)list visibleCells]) {
             PrepareCellOnce(cell);
@@ -691,32 +765,232 @@ static void ServiceHostList(UIScrollView* list, BOOL force) {
     NSNumber* last = objc_getAssociatedObject(list, ListExtrasPassKey);
     if (force || !last || last.unsignedIntegerValue != extras) {
         objc_setAssociatedObject(list, ListExtrasPassKey, @(extras), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        PaintListExtras(list);
+        ClearListExtras(list);
     }
-    RealignPaintedViews(list.window);
 }
 
-// Large lists in the theme's color (or clear, over a painted screen) in
-// "every screen" mode. Small embedded lists such as carousels are left alone.
-static void HostList(UIScrollView* list) {
-    if (!FullOn || IsHostList(list)) {
-        return;
+// A list in the theme color (or already clear) is made clear with its cells.
+// YES when its own color was cleared.
+static BOOL MakeListClear(UIScrollView* list) {
+    if (!FullOn || !IsAppWindow(list.window)) {
+        return NO;
     }
-    UIWindow* window = list.window;
-    if (!IsAppWindow(window) || list.bounds.size.height < window.bounds.size.height * 0.4) {
-        return;
+    if (IsHostList(list)) {
+        return NO;
     }
     UIColor* color = list.backgroundColor;
-    BOOL clear = !color || CGColorGetAlpha(color.CGColor) < 0.01;
-    if (!clear && !ColorMatchesTheme(color, list, 0.5)) {
+    BOOL alreadyClear = !color || CGColorGetAlpha(color.CGColor) < 0.01;
+    BOOL cleared = NO;
+    if (!alreadyClear) {
+        if (!ColorMatchesTheme(color, list, 0.5)) {
+            return NO;
+        }
+        cleared = ClearThemeBackground(list);
+        if (!cleared) {
+            // Slightly translucent theme colors under the clearing bar.
+            objc_setAssociatedObject(list, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            [WeakSet(&ClearedViewsStorage) addObject:list];
+            list.backgroundColor = UIColor.clearColor;
+            cleared = YES;
+        }
+    }
+    ClearThemeBackground(ListBackgroundView(list));
+    objc_setAssociatedObject(list, HostListKey, @(Generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (cleared) {
+        EnsureBack(list);
+    }
+    ServiceClearList(list, YES);
+    return cleared;
+}
+
+// A list not made clear yet is looked at again whenever its height changes:
+// one seen before it was laid out gets its turn once it has a size.
+static void ConsiderList(UIScrollView* list) {
+    NSUInteger signature = (Generation << 16) ^ (NSUInteger)list.bounds.size.height;
+    NSNumber* last = objc_getAssociatedObject(list, ListCheckKey);
+    if (last && last.unsignedIntegerValue == signature) {
         return;
     }
-    if (!clear) {
-        ApplyListWallpaper(list);
+    objc_setAssociatedObject(list, ListCheckKey, @(signature), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (list.bounds.size.height > 0) {
+        MakeListClear(list);
     }
-    objc_setAssociatedObject(list, HostListKey, @(PaintGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    ServiceHostList(list, YES);
 }
+
+// A screen: once per appearance and again when its view gains or loses
+// subviews; otherwise only its parts are lined up again.
+static void ClearController(UIViewController* controller, BOOL force) {
+    UIView* root = controller.viewIfLoaded;
+    UIWindow* window = root.window;
+    if (!root || !IsAppWindow(window)) {
+        return;
+    }
+    NSUInteger signature = (Generation << 16) ^ root.subviews.count;
+    NSNumber* last = objc_getAssociatedObject(root, ScreenPassKey);
+    if (force || !last || last.unsignedIntegerValue != signature) {
+        objc_setAssociatedObject(root, ScreenPassKey, @(signature), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (ClearSubtree(root, 300)) {
+            EnsureBack(root);
+        }
+    }
+    RealignPieces(window);
+}
+
+static void ClearControllerTree(UIViewController* controller, NSUInteger depth) {
+    if (!controller || depth > 16) {
+        return;
+    }
+    ClearController(controller, YES);
+    for (UIViewController* child in controller.childViewControllers) {
+        ClearControllerTree(child, depth + 1);
+    }
+    if (controller.presentedViewController.presentingViewController == controller) {
+        ClearControllerTree(controller.presentedViewController, depth + 1);
+    }
+}
+
+static void ClearAllScreens(void) {
+    for (UIWindow* window in UIApplication.sharedApplication.windows) {
+        if (IsAppWindow(window)) {
+            ClearControllerTree(window.rootViewController, 0);
+        }
+    }
+}
+
+%hook UIViewController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (FullOn) {
+        ClearController(self, NO);
+    }
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (FullOn) {
+        ClearController(self, YES);
+    }
+}
+
+%end
+
+%hook UITableView
+
+- (void)layoutSubviews {
+    %orig;
+    if (FullOn) {
+        if (IsHostList(self)) {
+            ServiceClearList(self, NO);
+        } else {
+            ConsiderList(self);
+        }
+    }
+}
+
+%end
+
+%hook UICollectionView
+
+- (void)layoutSubviews {
+    %orig;
+    if (FullOn) {
+        if (IsHostList(self)) {
+            ServiceClearList(self, NO);
+        } else {
+            ConsiderList(self);
+        }
+    }
+}
+
+%end
+
+// A reused cell is restyled by X, so it's made clear again.
+%hook UITableViewCell
+
+- (void)prepareForReuse {
+    %orig;
+    if (FullOn) {
+        objc_setAssociatedObject(self, CellPassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+%end
+
+%hook UICollectionViewCell
+
+- (void)prepareForReuse {
+    %orig;
+    if (FullOn) {
+        objc_setAssociatedObject(self, CellPassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+}
+
+%end
+
+// MARK: - Opening and closing screens
+
+// A new screen slides in over the old one (or the old one slides off over
+// the one below). With clear screens the one underneath would show through,
+// so it fades out alongside the slide; UIKit runs the fade with the slide,
+// interactive swipes back (and cancelled ones) included.
+static void FadeOutgoingScreen(UINavigationController* navigationController) {
+    if (!FullOn) {
+        return;
+    }
+    id<UIViewControllerTransitionCoordinator> coordinator = navigationController.transitionCoordinator;
+    if (!coordinator || !coordinator.isAnimated) {
+        return;
+    }
+    UIViewController* from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
+    UIView* fromView = from.viewIfLoaded;
+    if (!fromView || !IsAppWindow(fromView.window)) {
+        return;
+    }
+    CGFloat originalAlpha = fromView.alpha;
+    [coordinator
+        animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+            fromView.alpha = 0;
+        }
+        completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+            fromView.alpha = originalAlpha;
+        }];
+}
+
+%hook UINavigationController
+
+- (void)pushViewController:(UIViewController*)viewController animated:(BOOL)animated {
+    %orig;
+    if (animated) {
+        FadeOutgoingScreen(self);
+    }
+}
+
+- (UIViewController*)popViewControllerAnimated:(BOOL)animated {
+    UIViewController* popped = %orig;
+    if (animated) {
+        FadeOutgoingScreen(self);
+    }
+    return popped;
+}
+
+- (NSArray*)popToViewController:(UIViewController*)viewController animated:(BOOL)animated {
+    NSArray* popped = %orig;
+    if (animated) {
+        FadeOutgoingScreen(self);
+    }
+    return popped;
+}
+
+- (NSArray*)popToRootViewControllerAnimated:(BOOL)animated {
+    NSArray* popped = %orig;
+    if (animated) {
+        FadeOutgoingScreen(self);
+    }
+    return popped;
+}
+
+%end
 
 // MARK: - Header and tab bar
 
@@ -733,16 +1007,39 @@ static BOOL NavigationBarWantsWallpaper(UINavigationBar* bar) {
     return tabNavigationClass && [delegate isKindOfClass:tabNavigationClass];
 }
 
-// Every layer of the header painted in the theme's color, its own background
-// and UIKit's included; bars may be a little translucent.
+// Every layer of the header painted in the theme color gets its part (content
+// passes under it), UIKit's bar background included; bars may be a little
+// translucent. Lists in it (a tab strip's row of tabs) are made clear.
 static void PaintNavigationBar(UINavigationBar* bar, BOOL force) {
-    NSUInteger signature = (PaintGeneration << 16) ^ bar.subviews.count;
+    NSUInteger signature = (Generation << 16) ^ bar.subviews.count;
     NSNumber* last = objc_getAssociatedObject(bar, BarPassKey);
     if (force || !last || last.unsignedIntegerValue != signature) {
         objc_setAssociatedObject(bar, BarPassKey, @(signature), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        PaintTree(bar, 150, 0.5);
+        NSMutableArray<UIView*>* queue = [NSMutableArray arrayWithObject:bar];
+        for (NSUInteger i = 0; i < queue.count && i < 150; i++) {
+            UIView* view = queue[i];
+            if ([view isKindOfClass:BHTWallpaperView.class]) {
+                continue;
+            }
+            if (IsList(view)) {
+                ClearThemeBackground(view);
+                continue;
+            }
+            if ([view isKindOfClass:UIVisualEffectView.class]) {
+                [queue addObject:((UIVisualEffectView*)view).contentView];
+                continue;
+            }
+            if (CanPaint(view, 0.5)) {
+                PaintPiece(view);
+            }
+            if ([view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class] ||
+                [view isKindOfClass:UITextView.class]) {
+                continue;
+            }
+            [queue addObjectsFromArray:view.subviews];
+        }
     }
-    RealignPaintedViews(bar.window);
+    RealignPieces(bar.window);
 }
 
 static UIView* TabBarBackground(UIViewController* tabBarController) {
@@ -810,13 +1107,17 @@ static void RemoveTabBarWallpapers(void) {
     if (BarsOn) {
         AttachTabBarWallpaper((UIViewController*)self);
     }
+    // The main content's back, kept at the bottom.
+    if (FullOn && PieceLayer(((UIViewController*)self).view, NO)) {
+        AlignPiece(((UIViewController*)self).view);
+    }
 }
 
 %end
 
-// MARK: - Screens
+// MARK: - Timelines
 
-// Timelines in a tab, the default (not "every screen") treatment.
+// Timelines in a tab, the base option.
 static BOOL ControllerWantsWallpaper(UIViewController* controller, UIScrollView* list) {
     if (!WallpaperOn || !list) {
         return NO;
@@ -837,10 +1138,15 @@ static void ApplyWallpaperToController(UIViewController* controller) {
     if (!list) {
         return;
     }
-    if (ControllerWantsWallpaper(controller, list)) {
+    if (FullOn) {
+        // The back shows through instead.
+        RemoveListWallpaper(list);
+        MakeListClear(list);
+        PrepareVisibleCells(list);
+    } else if (ControllerWantsWallpaper(controller, list)) {
         ApplyListWallpaper(list);
         PrepareVisibleCells(list);
-    } else if (!FullOn) {
+    } else {
         RemoveListWallpaper(list);
     }
 }
@@ -854,129 +1160,6 @@ static void ApplyBarWallpaperForController(UIViewController* controller) {
         PaintNavigationBar(bar, YES);
     }
 }
-
-// "Every screen": the screen's views painted, once per appearance and again
-// when its view gains or loses subviews; otherwise only lined up again.
-static void PaintController(UIViewController* controller, BOOL force) {
-    UIView* root = controller.viewIfLoaded;
-    UIWindow* window = root.window;
-    if (!root || !IsAppWindow(window)) {
-        return;
-    }
-    NSUInteger signature = (PaintGeneration << 16) ^ root.subviews.count;
-    NSNumber* last = objc_getAssociatedObject(root, ScreenPassKey);
-    if (force || !last || last.unsignedIntegerValue != signature) {
-        objc_setAssociatedObject(root, ScreenPassKey, @(signature), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        PaintTree(root, 200, 0.5);
-    }
-    RealignPaintedViews(window);
-}
-
-// Paints what's on screen right away when the mode is switched on.
-static void PaintControllerTree(UIViewController* controller, NSUInteger depth) {
-    if (!controller || depth > 16) {
-        return;
-    }
-    PaintController(controller, YES);
-    for (UIViewController* child in controller.childViewControllers) {
-        PaintControllerTree(child, depth + 1);
-    }
-    if (controller.presentedViewController.presentingViewController == controller) {
-        PaintControllerTree(controller.presentedViewController, depth + 1);
-    }
-}
-
-static void PaintAllScreens(void) {
-    for (UIWindow* window in UIApplication.sharedApplication.windows) {
-        if (IsAppWindow(window)) {
-            PaintControllerTree(window.rootViewController, 0);
-        }
-    }
-}
-
-%hook UIViewController
-
-- (void)viewDidLayoutSubviews {
-    %orig;
-    if (FullOn) {
-        PaintController(self, NO);
-    }
-}
-
-- (void)viewDidAppear:(BOOL)animated {
-    %orig;
-    if (FullOn) {
-        PaintController(self, YES);
-    }
-}
-
-%end
-
-// A list not taken over yet is looked at again whenever its height changes:
-// one seen before it was laid out (zero-sized, as search results can be on
-// their first pass) gets its turn once it has a size.
-static void ConsiderList(UIScrollView* list) {
-    NSUInteger signature = (PaintGeneration << 16) ^ (NSUInteger)list.bounds.size.height;
-    NSNumber* last = objc_getAssociatedObject(list, ListCheckKey);
-    if (last && last.unsignedIntegerValue == signature) {
-        return;
-    }
-    objc_setAssociatedObject(list, ListCheckKey, @(signature), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    HostList(list);
-}
-
-static void ListDidLayout(UIScrollView* list) {
-    if (IsHostList(list)) {
-        ServiceHostList(list, NO);
-    } else {
-        ConsiderList(list);
-    }
-}
-
-%hook UITableView
-
-- (void)layoutSubviews {
-    %orig;
-    if (FullOn) {
-        ListDidLayout(self);
-    }
-}
-
-%end
-
-%hook UICollectionView
-
-- (void)layoutSubviews {
-    %orig;
-    if (FullOn) {
-        ListDidLayout(self);
-    }
-}
-
-%end
-
-// A reused cell is restyled by X, so it's made clear again.
-%hook UITableViewCell
-
-- (void)prepareForReuse {
-    %orig;
-    if (FullOn) {
-        objc_setAssociatedObject(self, CellPassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-}
-
-%end
-
-%hook UICollectionViewCell
-
-- (void)prepareForReuse {
-    %orig;
-    if (FullOn) {
-        objc_setAssociatedObject(self, CellPassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-}
-
-%end
 
 // MARK: - Switching
 
@@ -994,161 +1177,9 @@ static void RestoreEverything(void) {
     [WeakSet(&HostChangedCellsStorage) removeAllObjects];
 
     RestoreClearedViews();
-    RemovePaintedViews();
+    RemovePieces();
     RemoveTabBarWallpapers();
 }
-
-// MARK: - Swipes
-
-// Two kinds of movement keep the picture still behind moving content:
-//
-// Scrolling (paging between a profile's or the notifications' tabs, and any
-// other swipe made of a scroll view): the parts are lined up again as the
-// scroll view moves, during the same layout pass, so there's no lag. Scroll
-// views holding a painted part are marked when it's painted.
-//
-// Animated slides (opening a post, swiping back, a sheet coming up): UIKit
-// moves the screen with a position animation and its frame is already the
-// final one, so there's nothing to line up during the slide. Each part under
-// the sliding layer gets the opposite animation with the same timing, and
-// Core Animation itself keeps it still on screen. A slide of the whole app
-// (the sidebar moves the main content the picture is laid out against) gets
-// none, so the picture goes with it.
-
-static const void* ScrollHoldsWallpaperKey = &ScrollHoldsWallpaperKey;
-static BOOL AddingCounterAnimation;
-
-static void MarkScrollAncestors(UIView* view) {
-    for (UIView* ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
-        if ([ancestor isKindOfClass:UIScrollView.class] &&
-            !objc_getAssociatedObject(ancestor, ScrollHoldsWallpaperKey)) {
-            objc_setAssociatedObject(ancestor, ScrollHoldsWallpaperKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
-    }
-}
-
-static void ScrollViewMoved(UIScrollView* scrollView) {
-    if (WallpaperOn && (FullOn || BarsOn) && objc_getAssociatedObject(scrollView, ScrollHoldsWallpaperKey)) {
-        RealignPaintedViews(scrollView.window);
-    }
-}
-
-%hook UIScrollView
-
-- (void)setContentOffset:(CGPoint)offset {
-    %orig;
-    ScrollViewMoved(self);
-}
-
-- (void)layoutSubviews {
-    %orig;
-    ScrollViewMoved(self);
-}
-
-%end
-
-static BOOL LayerIsAncestorOrSelf(CALayer* ancestor, CALayer* layer) {
-    for (CALayer* current = layer; current; current = current.superlayer) {
-        if (current == ancestor) {
-            return YES;
-        }
-    }
-    return NO;
-}
-
-// A displacement in `from`'s superlayer, expressed in `space`.
-static CGPoint ConvertOffset(CGPoint offset, CALayer* from, CALayer* space) {
-    CALayer* source = from.superlayer;
-    CGPoint origin = [source convertPoint:CGPointZero toLayer:space];
-    CGPoint moved = [source convertPoint:offset toLayer:space];
-    return CGPointMake(moved.x - origin.x, moved.y - origin.y);
-}
-
-static void CounterAnimate(CALayer* picture, CALayer* animated, CABasicAnimation* animation, NSString* key,
-                           CGPoint startOffset, CGPoint endOffset) {
-    CALayer* space = picture.superlayer;
-    if (!space || !animated.superlayer) {
-        return;
-    }
-    CGPoint start = ConvertOffset(startOffset, animated, space);
-    CGPoint end = ConvertOffset(endOffset, animated, space);
-    CABasicAnimation* counter = [animation copy];
-    counter.keyPath = @"position";
-    counter.additive = YES;
-    counter.delegate = nil;
-    counter.fromValue = [NSValue valueWithCGPoint:CGPointMake(-start.x, -start.y)];
-    counter.toValue = [NSValue valueWithCGPoint:CGPointMake(-end.x, -end.y)];
-    counter.byValue = nil;
-    NSString* counterKey = [NSString stringWithFormat:@"bht.wallpaper.%p.%@", animated, key ?: @"position"];
-    AddingCounterAnimation = YES;
-    [picture addAnimation:counter forKey:counterKey];
-    AddingCounterAnimation = NO;
-}
-
-// A position animation on `animated`: every painted part and wallpaper view
-// under it, but above the view its picture is laid out against, gets the
-// opposite one.
-static void CounterAnimatePosition(CALayer* animated, CABasicAnimation* animation, NSString* key) {
-    NSValue* fromValue = animation.fromValue;
-    NSValue* toValue = animation.toValue;
-    if (![fromValue isKindOfClass:NSValue.class] || ![toValue isKindOfClass:NSValue.class] ||
-        strcmp(fromValue.objCType, @encode(CGPoint)) != 0 || strcmp(toValue.objCType, @encode(CGPoint)) != 0) {
-        return;
-    }
-    // How far the layer is from where it settles, at the start and the end.
-    CGPoint from = fromValue.CGPointValue;
-    CGPoint to = toValue.CGPointValue;
-    CGPoint startOffset = from;
-    CGPoint endOffset = to;
-    if (!animation.additive) {
-        CGPoint model = animated.position;
-        startOffset = CGPointMake(from.x - model.x, from.y - model.y);
-        endOffset = CGPointMake(to.x - model.x, to.y - model.y);
-    }
-    if (CGPointEqualToPoint(startOffset, CGPointZero) && CGPointEqualToPoint(endOffset, CGPointZero)) {
-        return;
-    }
-
-    for (UIView* view in WeakSet(&PaintedViewsStorage).allObjects) {
-        CALayer* container = PaintLayer(view, NO);
-        if (!view.window || container.superlayer != view.layer || !LayerIsAncestorOrSelf(animated, view.layer)) {
-            continue;
-        }
-        UIView* reference = AlignmentReference(view);
-        if (!reference || LayerIsAncestorOrSelf(animated, reference.layer)) {
-            continue;
-        }
-        AlignPaintedView(view);
-        CounterAnimate(container.sublayers.firstObject, animated, animation, key, startOffset, endOffset);
-    }
-    for (BHTWallpaperView* wallpaper in WallpaperViewsStorage.allObjects) {
-        if (!wallpaper.window || !LayerIsAncestorOrSelf(animated, wallpaper.layer)) {
-            continue;
-        }
-        UIView* reference = wallpaper.bht_reference.window == wallpaper.window ? wallpaper.bht_reference
-                                                                              : AlignmentReference(wallpaper);
-        if (!reference || LayerIsAncestorOrSelf(animated, reference.layer)) {
-            continue;
-        }
-        [wallpaper bht_align];
-        CounterAnimate(wallpaper.imageView.layer, animated, animation, key, startOffset, endOffset);
-    }
-}
-
-%hook CALayer
-
-- (void)addAnimation:(CAAnimation*)animation forKey:(NSString*)key {
-    %orig;
-    if (!WallpaperOn || AddingCounterAnimation || ![animation isKindOfClass:CABasicAnimation.class]) {
-        return;
-    }
-    CABasicAnimation* basic = (CABasicAnimation*)animation;
-    if ([basic.keyPath isEqualToString:@"position"]) {
-        CounterAnimatePosition(self, basic, key);
-    }
-}
-
-%end
 
 static void ReadWallpaperOptions(void) {
     WallpaperOn = BHTWatermark.active;
@@ -1158,23 +1189,11 @@ static void ReadWallpaperOptions(void) {
 
 static void ApplyWallpaperChange(void) {
     ReadWallpaperOptions();
-    PaintGeneration++;
+    Generation++;
+    // Start over, then add what the options ask for.
+    RestoreEverything();
     if (!WallpaperOn) {
-        RestoreEverything();
         return;
-    }
-
-    // Start over from the timelines in tabs, then add what the options ask for.
-    RemovePaintedViews();
-    RemoveTabBarWallpapers();
-    if (!FullOn) {
-        for (UIScrollView* list in WeakSet(&WallpaperedListsStorage).allObjects) {
-            RemoveListWallpaper(list);
-        }
-        [WeakSet(&WallpaperedListsStorage) removeAllObjects];
-        // Colors cleared for "every screen"; the tab timelines' cells are
-        // made clear again just below and as they show.
-        RestoreClearedViews();
     }
     for (UIViewController* controller in WeakSet(&SeenControllersStorage).allObjects) {
         ApplyWallpaperToController(controller);
@@ -1184,7 +1203,7 @@ static void ApplyWallpaperChange(void) {
         AttachTabBarWallpaper(tabBarController);
     }
     if (FullOn) {
-        PaintAllScreens();
+        ClearAllScreens();
     }
 }
 
