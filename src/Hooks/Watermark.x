@@ -73,6 +73,7 @@ static const void* OverlayOriginalColorKey = &OverlayOriginalColorKey;
 static const void* TintAlphaKey = &TintAlphaKey;
 static const void* OverlayBackgroundKey = &OverlayBackgroundKey;
 static const void* AddedOverlaysKey = &AddedOverlaysKey;
+static const void* AddedFadesKey = &AddedFadesKey;
 static const void* ScreenNormalAlphaKey = &ScreenNormalAlphaKey;
 static const void* KeepClearKey = &KeepClearKey;
 
@@ -254,6 +255,7 @@ static BOOL SameColor(UIColor* a, UIColor* b, UITraitCollection* traits) {
 }
 
 static BOOL IsInsideSidebar(UIView* view);
+static UIView* SidebarViewForLayers(void);
 
 static BOOL IsInsideCell(UIView* view) {
     for (UIView* ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
@@ -280,15 +282,58 @@ static BOOL IsHighlightColor(UIColor* color, UIView* view, CGFloat distance, CGF
     return distance >= 0.03 && distance <= 0.10 && alpha >= 0.85 && (IsInsideCell(view) || IsInsideSidebar(view));
 }
 
-// What a highlight looks like over the wallpaper.
+// What a highlight looks like over the wallpaper: the theme color, half
+// see-through. (Under 0.5 alpha, so nothing here takes it for a theme
+// background to make clear.)
 static UIColor* HighlightTint(void) {
     static UIColor* tint;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        tint = [UIColor colorWithWhite:0 alpha:0.3];
-    });
+    static UIColor* forTheme;
+    UIColor* theme = ThemeBackgroundColor();
+    if (!tint || forTheme != theme) {
+        tint = [theme colorWithAlphaComponent:0.45];
+        forTheme = theme;
+    }
     return tint;
 }
+
+// The sidebar is SwiftUI: a pressed row is drawn straight on a layer in the
+// theme color (or just off it), never through a view. A short layer inside
+// the sidebar given that color gets the highlight tint instead.
+static CGColorRef SidebarHighlightReplacement(CALayer* layer, CGColorRef color) {
+    UIView* sidebar = SidebarViewForLayers();
+    if (!sidebar || CGColorGetAlpha(color) < 0.5 || [layer.name isEqualToString:@"BHTWallpaper"]) {
+        return NULL;
+    }
+    CGFloat alpha = 0;
+    if (ThemeDistance([UIColor colorWithCGColor:color], sidebar, &alpha) > 0.10) {
+        return NULL;
+    }
+    if (layer.bounds.size.height > sidebar.bounds.size.height * 0.25) {
+        return NULL;
+    }
+    CALayer* sidebarLayer = sidebar.layer;
+    for (CALayer* ancestor = layer.superlayer; ancestor; ancestor = ancestor.superlayer) {
+        if (ancestor == sidebarLayer) {
+            return [HighlightTint() resolvedColorWithTraitCollection:sidebar.traitCollection].CGColor;
+        }
+    }
+    return NULL;
+}
+
+%hook CALayer
+
+- (void)setBackgroundColor:(CGColorRef)color {
+    if (FullOn && color) {
+        CGColorRef replacement = SidebarHighlightReplacement(self, color);
+        if (replacement) {
+            %orig(replacement);
+            return;
+        }
+    }
+    %orig;
+}
+
+%end
 
 // The color the view actually draws: its layer's. X answers `backgroundColor`
 // with the color it recorded for the view, which isn't what's drawn once the
@@ -350,6 +395,7 @@ static BOOL BlurTintsExist;
 
 static void ApplyToThemedView(UIView* view);
 static void ApplyTintPiece(UIView* tint);
+static void ProcessThemedViews(BOOL beforeDrawing);
 
 // The tint X lays over one of its blurs (the profile header's, collapsed):
 // its own view inside the blur.
@@ -713,11 +759,14 @@ static void AlignPiece(UIView* view) {
     if (!container || !view.window || container.superlayer != layer) {
         return;
     }
-    // A part stays only while its view is painted in the theme color: one
-    // left on a view X made clear or recolored (an overlay it's done with)
-    // would turn it into a plate covering what's under it. The backs and
-    // transition overlays, painted whatever their color, keep theirs.
+    // A large view's part stays only while the view is painted in the theme
+    // color: one left on an overlay X made clear or recolored (done with it)
+    // would turn it into a plate covering what's under it. Short chrome (the
+    // tab strips, header parts) keeps its part through X's passing recolors,
+    // so it never flashes in the theme color; the backs and transition
+    // overlays keep theirs whatever their color.
     if (!objc_getAssociatedObject(view, PlateKey) &&
+        view.bounds.size.height > view.window.bounds.size.height * 0.25 &&
         !ColorMatchesTheme(EffectiveBackgroundColor(view), view, 0.5)) {
         [CATransaction begin];
         [CATransaction setDisableActions:YES];
@@ -1123,6 +1172,7 @@ static NSArray<UIView*>* StripsIn(UIView* root, NSUInteger limit) {
             objc_setAssociatedObject(strip, StripPassKey, @(signature), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
         PaintStrip(strip, changed);
+        ProcessThemedViews(NO);
     }
 }
 
@@ -1818,6 +1868,27 @@ static void SettleTransitions(void) {
     ShowShades(WeakSet(&HiddenShadesStorage).allObjects);
 }
 
+static void PaintNavigationBar(UINavigationBar* bar, BOOL force);
+
+// A screen's header, painted now: what X painted since the last pass, its
+// strip, and the header itself.
+static void PrepaintHeaderOf(UIViewController* controller) {
+    if (!BarsOn || ![controller isKindOfClass:UIViewController.class]) {
+        return;
+    }
+    ProcessThemedViews(NO);
+    UIView* accessory = HeaderAccessoryOf(controller);
+    if (accessory.window) {
+        for (UIView* strip in StripsIn(accessory, 40)) {
+            PaintStrip(strip, YES);
+        }
+    }
+    UINavigationBar* bar = controller.navigationController.navigationBar;
+    if (NavigationBarWantsWallpaper(bar)) {
+        PaintNavigationBar(bar, NO);
+    }
+}
+
 // X's navigation controller finished its own transition animation (done or
 // cancelled): every fade it started ends now.
 static void EndNavigationFades(UINavigationController* navigationController) {
@@ -1871,6 +1942,20 @@ static void EndNavigationFades(UINavigationController* navigationController) {
 - (void)_tfn_transitionAnimationCompletedIsCanceled:(BOOL)canceled isPush:(BOOL)push {
     %orig;
     EndNavigationFades((UINavigationController*)self);
+}
+
+// X snapshots a screen's header items to show while the header changes over
+// (coming back to the timeline from the tab bar). The header is painted
+// first, so the snapshot never carries the theme color.
+- (void)_tfn_recordGlassBarItemMirrorsOfViewController:(UIViewController*)controller {
+    PrepaintHeaderOf(controller);
+    %orig;
+}
+
+- (void)_tfn_beginGlassBarTransitionToViewController:(UIViewController*)controller {
+    PrepaintHeaderOf(((UINavigationController*)self).topViewController);
+    PrepaintHeaderOf(controller);
+    %orig;
 }
 
 %end
@@ -2003,12 +2088,68 @@ static void AddPushOverlay(id animator, id<UIViewControllerContextTransitioning>
                      completion:nil];
 }
 
+// Opening a screen: the header strip of the screen being left (and X's
+// snapshot of its header, which X shows while the header changes over)
+// fades out with it. Their alpha is put back when the transition ends.
+static void FadeOutHeaderForPush(id animator, id<UIViewControllerContextTransitioning> transition) {
+    if (transition.isInteractive) {
+        return;
+    }
+    UIViewController* from = [transition viewControllerForKey:UITransitionContextFromViewControllerKey];
+    UINavigationController* navigationController = from.navigationController;
+    if (![navigationController isKindOfClass:UINavigationController.class]) {
+        navigationController = nfb_objectIvar(animator, "_navigationController");
+    }
+    NSMutableArray<UIView*>* views = [NSMutableArray array];
+    UIView* accessory = from ? HeaderAccessoryOf(from) : nil;
+    if (accessory) {
+        [views addObject:accessory];
+    }
+    UIView* snapshot = nfb_objectIvar(navigationController, "_glassBarTransitionSnapshot");
+    if ([snapshot isKindOfClass:UIView.class] && snapshot != accessory) {
+        [views addObject:snapshot];
+    }
+    NSMutableArray* faded = objc_getAssociatedObject(animator, AddedFadesKey);
+    if (!faded) {
+        faded = [NSMutableArray array];
+        objc_setAssociatedObject(animator, AddedFadesKey, faded, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    NSTimeInterval duration = 0.3;
+    if ([animator respondsToSelector:@selector(transitionDuration:)]) {
+        duration = ((NSTimeInterval (*)(id, SEL, id))objc_msgSend)(animator, @selector(transitionDuration:),
+                                                                   transition);
+    }
+    for (UIView* view in views) {
+        if (!view.window || view.alpha < 0.01) {
+            continue;
+        }
+        [faded addObject:@[view, @(view.alpha)]];
+        [UIView animateWithDuration:duration
+                              delay:0
+                            options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
+                         animations:^{
+                             view.alpha = 0;
+                         }
+                         completion:nil];
+    }
+}
+
 static void RemoveAddedOverlays(id animator) {
     NSMutableArray<UIView*>* added = objc_getAssociatedObject(animator, AddedOverlaysKey);
     for (UIView* overlay in added) {
         [overlay removeFromSuperview];
     }
     [added removeAllObjects];
+    NSMutableArray* faded = objc_getAssociatedObject(animator, AddedFadesKey);
+    for (NSArray* entry in faded) {
+        UIView* view = entry[0];
+        CGFloat alpha = [entry[1] doubleValue];
+        [view.layer removeAnimationForKey:@"opacity"];
+        [UIView performWithoutAnimation:^{
+            view.alpha = alpha;
+        }];
+    }
+    [faded removeAllObjects];
 }
 
 %group TFNOverlay
@@ -2031,8 +2172,11 @@ static void RemoveAddedOverlays(id animator) {
     long long operation = [(id)self respondsToSelector:@selector(operation)]
                               ? ((long long (*)(id, SEL))objc_msgSend)(self, @selector(operation))
                               : 0;
-    if (painted == 0 && operation == UINavigationControllerOperationPush) {
-        AddPushOverlay(self, transition);
+    if (operation == UINavigationControllerOperationPush) {
+        if (painted == 0) {
+            AddPushOverlay(self, transition);
+        }
+        FadeOutHeaderForPush(self, transition);
     }
 }
 
@@ -2255,6 +2399,12 @@ static BOOL IsInsideSidebar(UIView* view) {
     return sidebar && [view isDescendantOfView:sidebar];
 }
 
+// The sidebar, while it's on screen.
+static UIView* SidebarViewForLayers(void) {
+    UIView* sidebar = SidebarView;
+    return sidebar.window ? sidebar : nil;
+}
+
 static BOOL HoldsMainApp(UIView* view) {
     UIView* split = AppSplit.viewIfLoaded;
     return split && [split isDescendantOfView:view];
@@ -2334,28 +2484,74 @@ static void SetSidebarAlpha(UIViewController* split, UIView* sidebar, CGFloat al
 // opens. Over the wallpaper that's a dark veil, so in "every screen" mode the
 // overlay's color is made clear; the overlay itself stays (it takes the tap
 // that closes the sidebar). Its color is put back when the mode is off.
+// Views made clear here, with their color kept to put back.
+static NSHashTable* ClearedVeilsStorage;
+
+static void ClearVeil(UIView* veil) {
+    CGColorRef drawn = veil.layer.backgroundColor;
+    if (!drawn || CGColorGetAlpha(drawn) < 0.01) {
+        return;
+    }
+    if (!objc_getAssociatedObject(veil, OverlayBackgroundKey)) {
+        UIColor* original = veil.backgroundColor ?: [UIColor colorWithCGColor:drawn];
+        objc_setAssociatedObject(veil, OverlayBackgroundKey, original, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [WeakSet(&ClearedVeilsStorage) addObject:veil];
+    veil.backgroundColor = UIColor.clearColor;
+}
+
+// An empty plain view painted dark (black, or the theme's dark background):
+// a veil laid over the content, not part of it.
+static BOOL IsDarkVeil(UIView* view) {
+    if (view.subviews.count > 0 || [view isKindOfClass:UIImageView.class] ||
+        [view isKindOfClass:BHTWallpaperView.class] || [view isKindOfClass:UIVisualEffectView.class]) {
+        return NO;
+    }
+    CGColorRef drawn = view.layer.backgroundColor;
+    if (!drawn || CGColorGetAlpha(drawn) < 0.01) {
+        return NO;
+    }
+    CGFloat red = 1, green = 1, blue = 1, alpha = 0;
+    if (![[UIColor colorWithCGColor:drawn] getRed:&red green:&green blue:&blue alpha:&alpha]) {
+        return NO;
+    }
+    return red < 0.2 && green < 0.2 && blue < 0.2;
+}
+
 static void ClearSidebarOverlays(UIViewController* split) {
+    if (!FullOn) {
+        for (UIView* veil in WeakSet(&ClearedVeilsStorage).allObjects) {
+            UIColor* original = objc_getAssociatedObject(veil, OverlayBackgroundKey);
+            objc_setAssociatedObject(veil, OverlayBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (original) {
+                veil.backgroundColor = original;
+            }
+        }
+        [WeakSet(&ClearedVeilsStorage) removeAllObjects];
+        return;
+    }
     if (!split) {
         return;
     }
+    NSMutableArray<UIView*>* parents = [NSMutableArray array];
+    if (split.viewIfLoaded) {
+        [parents addObject:split.viewIfLoaded];
+    }
     for (NSString* name in @[@"_contentHostView", @"_dashHostView"]) {
         UIView* host = nfb_objectIvar(split, name.UTF8String);
-        UIView* overlay = BHTSafeObject(host, @selector(overlayView));
-        if (![overlay isKindOfClass:UIView.class]) {
+        if (![host isKindOfClass:UIView.class]) {
             continue;
         }
-        if (FullOn) {
-            CGColorRef drawn = overlay.layer.backgroundColor;
-            if (drawn && CGColorGetAlpha(drawn) > 0.01) {
-                UIColor* original = overlay.backgroundColor ?: [UIColor colorWithCGColor:drawn];
-                objc_setAssociatedObject(overlay, OverlayBackgroundKey, original, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                overlay.backgroundColor = UIColor.clearColor;
-            }
-        } else {
-            UIColor* original = objc_getAssociatedObject(overlay, OverlayBackgroundKey);
-            if (original) {
-                objc_setAssociatedObject(overlay, OverlayBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                overlay.backgroundColor = original;
+        [parents addObject:host];
+        UIView* overlay = BHTSafeObject(host, @selector(overlayView));
+        if ([overlay isKindOfClass:UIView.class]) {
+            ClearVeil(overlay);
+        }
+    }
+    for (UIView* parent in parents) {
+        for (UIView* view in parent.subviews) {
+            if (IsDarkVeil(view)) {
+                ClearVeil(view);
             }
         }
     }
@@ -2383,6 +2579,18 @@ static void SidebarMoved(UIViewController* split) {
     UpdateSidebarFade(split);
     KeepMainBackInPlace(split.viewIfLoaded.window);
 }
+
+// The shade X lays over the content's edge (and over it as the sidebar
+// opens) stays off in "every screen" mode.
+%group SplitHost
+%hook T1AppSplitHostView
+
+- (void)setShadowAlpha:(double)alpha {
+    %orig(FullOn ? 0 : alpha);
+}
+
+%end
+%end
 
 %hook T1AppSplitViewController
 
@@ -2440,6 +2648,8 @@ static void SidebarMoved(UIViewController* split) {
     %orig;
     if (NavigationBarWantsWallpaper((UINavigationBar*)self)) {
         PaintNavigationBar((UINavigationBar*)self, NO);
+        // What X painted while laying the header out, in the same frame.
+        ProcessThemedViews(NO);
     }
 }
 
@@ -2804,6 +3014,9 @@ static void ProcessThemedViews(BOOL beforeDrawing) {
     }
     if (objc_getClass("TFNNavigationControllerTransitionAnimator")) {
         %init(TFNOverlay);
+    }
+    if (objc_getClass("T1AppSplitHostView")) {
+        %init(SplitHost);
     }
     if (objc_getClass("TAEColorSettings")) {
         %init(PaletteChanges);
