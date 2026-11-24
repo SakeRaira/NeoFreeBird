@@ -351,6 +351,15 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"default": @YES,
                         @"type": @"toggle"
                     },
+                    // Whether the block is in place, written by Chat.x.
+                    @{
+                        @"type": @"compactButton",
+                        @"parentKey": @"no_dm_read_receipts",
+                        @"titleKey": @"READ_RECEIPTS_STATUS_TITLE",
+                        @"action": @"showReadReceiptsStatus:",
+                        @"prefKeyForSubtitle": @"no_dm_read_receipts_status",
+                        @"subtitleDefaultKey": @"READ_RECEIPTS_STATUS_NOT_FOUND"
+                    },
                     @{
                         @"key": @"hide_typing_indicator",
                         @"default": @NO,

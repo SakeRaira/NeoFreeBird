@@ -237,6 +237,12 @@
 
 "NO_DM_READ_RECEIPTS_TITLE" = "Don't send read receipts";
 "NO_DM_READ_RECEIPTS_DETAIL" = "Reading a chat no longer tells the other person you've seen it. Their read receipts still show. Chats you read stay marked unread on your side too.";
+"READ_RECEIPTS_STATUS_TITLE" = "Read receipt block status";
+"READ_RECEIPTS_STATUS_ACTIVE" = "Active";
+"READ_RECEIPTS_STATUS_WAITING" = "Ready (starts when a chat opens)";
+"READ_RECEIPTS_STATUS_NOT_FOUND" = "Not found yet";
+"READ_RECEIPTS_STATUS_BLOCKED_FORMAT" = "%@ · %ld blocked";
+"READ_RECEIPTS_STATUS_COPY" = "Copy";
 
 "DOWNLOAD_VOICE_MESSAGES_TITLE" = "Download voice messages";
 "DOWNLOAD_VOICE_MESSAGES_DETAIL" = "Save voice messages to your device after playing them (long-press on an audio message with 2 fingers to download it).";

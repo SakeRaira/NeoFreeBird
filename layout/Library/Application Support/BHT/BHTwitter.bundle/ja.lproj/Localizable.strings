@@ -237,6 +237,12 @@
 
 "NO_DM_READ_RECEIPTS_TITLE" = "既読をつけない";
 "NO_DM_READ_RECEIPTS_DETAIL" = "チャットを読んでも、相手に既読が表示されないようにします。相手の既読は引き続き表示されます。読んだチャットは自分の側でも未読のまま残ります。";
+"READ_RECEIPTS_STATUS_TITLE" = "既読ブロックの状態";
+"READ_RECEIPTS_STATUS_ACTIVE" = "動作中";
+"READ_RECEIPTS_STATUS_WAITING" = "準備完了（チャットを開くと動作）";
+"READ_RECEIPTS_STATUS_NOT_FOUND" = "未検出";
+"READ_RECEIPTS_STATUS_BLOCKED_FORMAT" = "%@・%ld件ブロック";
+"READ_RECEIPTS_STATUS_COPY" = "コピー";
 
 "DOWNLOAD_VOICE_MESSAGES_TITLE" = "ボイスメッセージをダウンロード";
 "DOWNLOAD_VOICE_MESSAGES_DETAIL" = "ボイスメッセージを再生した後にデバイスに保存します（音声を2本指で長押ししてダウンロードすることもできます）。";
