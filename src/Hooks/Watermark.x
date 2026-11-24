@@ -26,9 +26,11 @@
 //     back so it lines up. They hardly move; one inside a scrolling list (a
 //     profile's sticky strip) is lined up as the list scrolls.
 //   - Opening or closing a screen slides the new one over the old; with both
-//     clear they'd show at once, so they cross-fade alongside the slide
-//     (UIKit runs the fades with the slide, swipes back included), without
-//     UIKit's dark veil over the one underneath.
+//     clear they'd show at once. In X's own navigation the overlay its
+//     animator dims the screen underneath with becomes the wallpaper, so that
+//     screen is covered as the new one slides in and uncovered as a swipe
+//     back goes on, without touching the screens. Elsewhere the screens
+//     cross-fade alongside UIKit's slide, without its dark veil.
 //   - X paints its theme colors through setters it calls again whenever the
 //     look changes. A view made clear stays clear in that same call; any
 //     other view given the theme's background color is handled right before
@@ -66,6 +68,8 @@ static const void* StripPassKey = &StripPassKey;
 static const void* FadeAlphaKey = &FadeAlphaKey;
 static const void* FadeTransitionKey = &FadeTransitionKey;
 static const void* FadeNavigationKey = &FadeNavigationKey;
+static const void* PlateKey = &PlateKey;
+static const void* OverlayOriginalColorKey = &OverlayOriginalColorKey;
 static const void* ScreenNormalAlphaKey = &ScreenNormalAlphaKey;
 static const void* KeepClearKey = &KeepClearKey;
 
@@ -463,6 +467,15 @@ static BOOL CanPaint(UIView* view, CGFloat minAlpha) {
     return ColorMatchesTheme(EffectiveBackgroundColor(view), view, minAlpha);
 }
 
+// Only the header's own layers get parts: its background reaches up under
+// the status bar, but nothing reaching far below the bar (an overlay X puts
+// there during transitions) does, or it would become a plate over the screen.
+static BOOL FitsInBar(UIView* view, UINavigationBar* bar) {
+    CGRect frame = [view convertRect:view.bounds toView:bar];
+    CGFloat barHeight = bar.bounds.size.height;
+    return CGRectGetMaxY(frame) <= barHeight + 80 && frame.size.height <= barHeight + 200;
+}
+
 // A view's part of the picture: a clipping layer in the theme color at the
 // bottom of the view, holding the picture laid out against the view's back.
 static CALayer* PieceLayer(UIView* view, BOOL create) {
@@ -488,6 +501,19 @@ static void AlignPiece(UIView* view) {
     CALayer* container = PieceLayer(view, NO);
     CALayer* layer = view.layer;
     if (!container || !view.window || container.superlayer != layer) {
+        return;
+    }
+    // A part stays only while its view is painted in the theme color: one
+    // left on a view X made clear or recolored (an overlay it's done with)
+    // would turn it into a plate covering what's under it. The backs and
+    // transition overlays, painted whatever their color, keep theirs.
+    if (!objc_getAssociatedObject(view, PlateKey) &&
+        !ColorMatchesTheme(EffectiveBackgroundColor(view), view, 0.5)) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        [container removeFromSuperlayer];
+        [CATransaction commit];
+        [WeakSet(&PiecesStorage) removeObject:view];
         return;
     }
     [CATransaction begin];
@@ -727,6 +753,7 @@ static void PrepareVisibleCells(UIScrollView* list) {
 static void EnsureBack(UIView* view) {
     UIView* back = AlignmentReference(view);
     if (back && back != view.window && ![back isKindOfClass:UIScrollView.class]) {
+        objc_setAssociatedObject(back, PlateKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         PaintPiece(back);
     }
 }
@@ -1434,9 +1461,22 @@ static id<UIViewControllerTransitionCoordinator> CoordinatorFor(UINavigationCont
     return nil;
 }
 
+// X's own navigation controllers, whose transitions show the wallpaper
+// through their overlay instead (see "X's own transitions").
+static BOOL UsesTransitionOverlay(UINavigationController* navigationController) {
+    static Class navigationClass;
+    static BOOL overlayAvailable;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        navigationClass = objc_getClass("TFNNavigationController");
+        overlayAvailable = objc_getClass("TFNNavigationControllerTransitionAnimator") != nil;
+    });
+    return overlayAvailable && navigationClass && [navigationController isKindOfClass:navigationClass];
+}
+
 static void CrossFadeScreens(UINavigationController* navigationController, UIViewController* expectedFrom,
                              UIViewController* expectedTo) {
-    if (!FullOn) {
+    if (!FullOn || UsesTransitionOverlay(navigationController)) {
         return;
     }
     id<UIViewControllerTransitionCoordinator> coordinator =
@@ -1609,6 +1649,113 @@ static void EndNavigationFades(UINavigationController* navigationController) {
 %end
 %end
 
+// MARK: - X's own transitions
+
+// X's navigation controllers move screens with their own animator, which
+// darkens the screen underneath with an overlay that follows the slide (and
+// the finger on a swipe back, cancelled ones included). In "every screen"
+// mode that overlay is the wallpaper itself: the screen underneath is
+// covered by the wallpaper as a new one slides in over it, and uncovered as
+// a swipe back goes on. The screens' own alpha is never touched there, so
+// X's transition code (which also rearranges the header) finds them as it
+// left them.
+
+// The overlay in the theme color, fully covering at its strongest; X's own
+// color is put back when the mode is off.
+static void PrepareTransitionOverlay(id animator) {
+    SEL setter = @selector(setBackgroundViewOverlayColor:maximumAlpha:);
+    SEL alphaGetter = @selector(maximumAlpha);
+    if (![animator respondsToSelector:setter] || ![animator respondsToSelector:alphaGetter]) {
+        return;
+    }
+    double maximumAlpha = ((double (*)(id, SEL))objc_msgSend)(animator, alphaGetter);
+    id saved = objc_getAssociatedObject(animator, OverlayOriginalColorKey);
+    if (FullOn) {
+        if (!saved) {
+            id original = nfb_objectIvar(animator, "_backgroundViewOverlayColor");
+            objc_setAssociatedObject(animator, OverlayOriginalColorKey,
+                                     [original isKindOfClass:UIColor.class] ? original : NSNull.null,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        ((void (*)(id, SEL, id, double))objc_msgSend)(animator, setter, ThemeBackgroundColor(), maximumAlpha);
+    } else if (saved) {
+        objc_setAssociatedObject(animator, OverlayOriginalColorKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        ((void (*)(id, SEL, id, double))objc_msgSend)(animator, setter,
+                                                      [saved isKindOfClass:UIColor.class] ? saved : nil,
+                                                      maximumAlpha);
+    }
+}
+
+// Where X may put the overlay: beside the screens or on top of one.
+static NSArray<UIView*>* TransitionOverlayCandidates(id<UIViewControllerContextTransitioning> transition) {
+    NSMutableArray<UIView*>* views = [NSMutableArray array];
+    UIView* container = transition.containerView;
+    UIView* fromView = [transition viewControllerForKey:UITransitionContextFromViewControllerKey].viewIfLoaded;
+    UIView* toView = [transition viewControllerForKey:UITransitionContextToViewControllerKey].viewIfLoaded;
+    for (UIView* parent in @[container ?: (id)NSNull.null, fromView ?: (id)NSNull.null, toView ?: (id)NSNull.null]) {
+        if ([parent isKindOfClass:UIView.class]) {
+            [views addObjectsFromArray:parent.subviews];
+            for (UIView* child in parent.subviews) {
+                [views addObjectsFromArray:child.subviews];
+            }
+        }
+    }
+    return views;
+}
+
+// The overlay X just added (a new screen-sized view in the theme color, not
+// a screen or one holding a screen) gets the picture.
+static void PaintTransitionOverlay(id<UIViewControllerContextTransitioning> transition, NSHashTable* before) {
+    UIView* container = transition.containerView;
+    UIView* fromView = [transition viewControllerForKey:UITransitionContextFromViewControllerKey].viewIfLoaded;
+    UIView* toView = [transition viewControllerForKey:UITransitionContextToViewControllerKey].viewIfLoaded;
+    CGSize size = container.bounds.size;
+    for (UIView* view in TransitionOverlayCandidates(transition)) {
+        if ([before containsObject:view] || view == fromView || view == toView ||
+            [view isKindOfClass:BHTWallpaperView.class] ||
+            (fromView && [fromView isDescendantOfView:view]) || (toView && [toView isDescendantOfView:view])) {
+            continue;
+        }
+        if (view.bounds.size.width < size.width * 0.8 || view.bounds.size.height < size.height * 0.8) {
+            continue;
+        }
+        if (!ColorMatchesTheme(EffectiveBackgroundColor(view), view, 0.5)) {
+            continue;
+        }
+        objc_setAssociatedObject(view, PlateKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        PaintPiece(view);
+    }
+}
+
+%group TFNOverlay
+%hook TFNNavigationControllerTransitionAnimator
+
+- (void)animateTransition:(id<UIViewControllerContextTransitioning>)transition {
+    PrepareTransitionOverlay(self);
+    if (!FullOn) {
+        %orig;
+        return;
+    }
+    NSHashTable* before = [NSHashTable hashTableWithOptions:NSPointerFunctionsWeakMemory |
+                                                            NSPointerFunctionsObjectPointerPersonality];
+    for (UIView* view in TransitionOverlayCandidates(transition)) {
+        [before addObject:view];
+    }
+    %orig;
+    PaintTransitionOverlay(transition, before);
+}
+
+- (double)_tfn_maximumAlphaForTransition:(id)transition {
+    return FullOn ? 1.0 : %orig;
+}
+
+- (BOOL)suppressDimming {
+    return FullOn ? NO : %orig;
+}
+
+%end
+%end
+
 // MARK: - Header and tab bar
 
 // Headers of the tabs, or every header in "every screen" mode.
@@ -1663,7 +1810,7 @@ static void PaintNavigationBar(UINavigationBar* bar, BOOL force) {
                 [queue addObject:((UIVisualEffectView*)view).contentView];
                 continue;
             }
-            if (CanPaint(view, 0.5)) {
+            if (CanPaint(view, 0.5) && FitsInBar(view, bar)) {
                 PaintPiece(view);
             }
             if ([view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class] ||
@@ -2169,7 +2316,8 @@ static void ApplyToThemedView(UIView* view) {
             return;
         }
         if ([ancestor isKindOfClass:UINavigationBar.class]) {
-            if (NavigationBarWantsWallpaper((UINavigationBar*)ancestor) && CanPaint(view, 0.5)) {
+            if (NavigationBarWantsWallpaper((UINavigationBar*)ancestor) && CanPaint(view, 0.5) &&
+                FitsInBar(view, (UINavigationBar*)ancestor)) {
                 PaintPiece(view);
             }
             return;
@@ -2302,6 +2450,9 @@ static void ProcessThemedViews(BOOL beforeDrawing) {
     }
     if (objc_getClass("TFNNavigationController")) {
         %init(TFNTransitions);
+    }
+    if (objc_getClass("TFNNavigationControllerTransitionAnimator")) {
+        %init(TFNOverlay);
     }
     if (objc_getClass("TAEColorSettings")) {
         %init(PaletteChanges);
