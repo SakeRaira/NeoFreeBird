@@ -203,39 +203,66 @@ static void ClearThemeBackgroundsInside(UIView* root) {
 
 // MARK: - Alignment
 
+// The sidebar's view and the controller holding it and the tabs, recorded as
+// they lay out. X keeps the sidebar behind the main content and slides the
+// content aside to show it.
+static __weak UIViewController* AppNavigation;
+static __weak UIView* SidebarView;
+
+// The main content's back: the view holding the tabs that the sidebar slides
+// aside, above the sidebar, so the picture at its bottom hides the sidebar
+// behind it and goes with the content when it slides. The tabs' container
+// when it doesn't hold the sidebar; otherwise, from `sample`, the highest
+// view that doesn't hold the sidebar.
+static UIView* MainContentBack(UIView* sample) {
+    UIView* sidebar = SidebarView;
+    UIViewController* tabs = BHTSafeObject(AppNavigation, @selector(tabbedContainerViewController));
+    UIView* container = [tabs isKindOfClass:UIViewController.class] ? tabs.viewIfLoaded : nil;
+    if (container && (!sidebar || ![sidebar isDescendantOfView:container])) {
+        return container;
+    }
+    if (sidebar && sample && ![sample isDescendantOfView:sidebar]) {
+        for (UIView* ancestor = sample; ancestor.superview; ancestor = ancestor.superview) {
+            if ([sidebar isDescendantOfView:ancestor.superview]) {
+                return ancestor;
+            }
+        }
+    }
+    return container;
+}
+
 // What the picture is laid out against, the size of the window and anchored
 // at its top left: a sheet or modal's own view (it slides as one piece), the
-// main content (the tab bar controller's view, which the sidebar slides as
-// one piece), otherwise the nearest view directly under the root view or the
-// window (the sidebar).
+// sidebar, the main content's back (which the sidebar slides as one piece),
+// otherwise the nearest view directly under the root view or the window.
 static UIView* AlignmentReference(UIView* view) {
     UIWindow* window = view.window;
     if (!window) {
         return nil;
     }
-    static Class tabBarControllerClass;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        tabBarControllerClass = objc_getClass("T1TabBarViewController");
-    });
     UIView* rootView = window.rootViewController.viewIfLoaded;
     UIView* fallback = nil;
     for (UIView* ancestor = view; ancestor && ancestor != window; ancestor = ancestor.superview) {
         UIResponder* responder = ancestor.nextResponder;
         if ([responder isKindOfClass:UIViewController.class]) {
             UIViewController* controller = (UIViewController*)responder;
-            if (controller.viewIfLoaded == ancestor) {
-                if (tabBarControllerClass && [controller isKindOfClass:tabBarControllerClass]) {
-                    return ancestor;
-                }
-                if (controller.presentingViewController && !controller.parentViewController) {
-                    return ancestor;
-                }
+            if (controller.viewIfLoaded == ancestor && controller.presentingViewController &&
+                !controller.parentViewController) {
+                return ancestor;
             }
         }
         if (!fallback && (ancestor.superview == rootView || ancestor.superview == window)) {
             fallback = ancestor;
         }
+    }
+
+    UIView* sidebar = SidebarView;
+    if (sidebar && sidebar.window == window && [view isDescendantOfView:sidebar]) {
+        return sidebar;
+    }
+    UIView* main = MainContentBack(view);
+    if (main && main.window == window && [view isDescendantOfView:main]) {
+        return main;
     }
     return fallback ?: window;
 }
@@ -649,6 +676,68 @@ static Class TabStripClass(void) {
     return stripClass;
 }
 
+// A row of tabs (Following, All/Mentions, Top/Latest...): X's segmented tab
+// bar, or another segmented bar by its name.
+static BOOL IsTabStrip(UIView* view) {
+    Class stripClass = TabStripClass();
+    if (stripClass && [view isKindOfClass:stripClass]) {
+        return YES;
+    }
+    NSString* name = NSStringFromClass(view.class);
+    return [name containsString:@"Segmented"] && ([name containsString:@"TabBar"] || [name containsString:@"TabsBar"]);
+}
+
+// A strip and its short containers get a part of the picture: content passes
+// under them. Their row of tabs is made clear over it. Called whenever the
+// strip lays out or comes back on screen, since X restyles or rebuilds it
+// (coming back to a tab).
+static void PaintStrip(UIView* strip) {
+    UIWindow* window = strip.window;
+    if (!IsAppWindow(window)) {
+        return;
+    }
+    CGFloat shortHeight = window.bounds.size.height * 0.25;
+    for (UIView* view = strip; view && view.bounds.size.height <= shortHeight; view = view.superview) {
+        if ([view isKindOfClass:UINavigationBar.class]) {
+            break;
+        }
+        if (CanPaint(view, 0.5)) {
+            PaintPiece(view);
+        } else if (PieceLayer(view, NO)) {
+            AlignPiece(view);
+        }
+    }
+    for (UIView* subview in strip.subviews) {
+        if (IsList(subview)) {
+            ClearThemeBackground(subview);
+            if ([subview respondsToSelector:@selector(visibleCells)]) {
+                for (UIView* cell in [(id)subview visibleCells]) {
+                    ClearThemeBackground(cell);
+                    ClearThemeBackground([(id)cell contentView]);
+                }
+            }
+        }
+    }
+}
+
+%hook _TtC10TFNUISwift25LegacySegmentedTabBarView
+
+- (void)layoutSubviews {
+    %orig;
+    if (BarsOn) {
+        PaintStrip((UIView*)self);
+    }
+}
+
+- (void)didMoveToWindow {
+    %orig;
+    if (BarsOn && ((UIView*)self).window) {
+        PaintStrip((UIView*)self);
+    }
+}
+
+%end
+
 // The tab bar's own views keep their look; it gets its part separately.
 static NSSet* TabBarViews(void) {
     NSMutableSet* views = [NSMutableSet set];
@@ -672,7 +761,6 @@ static BOOL ClearSubtree(UIView* root, NSUInteger limit) {
     if (!window) {
         return NO;
     }
-    Class stripClass = TabStripClass();
     NSSet* tabBarViews = TabBarViews();
 
     NSMutableArray<UIView*>* visited = [NSMutableArray array];
@@ -685,7 +773,7 @@ static BOOL ClearSubtree(UIView* root, NSUInteger limit) {
             continue;
         }
         [visited addObject:view];
-        if (stripClass && [view isKindOfClass:stripClass]) {
+        if (IsTabStrip(view)) {
             [strips addObject:view];
         }
         if (IsList(view) || [view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class] ||
@@ -721,6 +809,17 @@ static BOOL ClearSubtree(UIView* root, NSUInteger limit) {
         }
         if (IsList(view)) {
             cleared = MakeListClear((UIScrollView*)view) || cleared;
+            continue;
+        }
+        // A short bar in a slightly translucent theme color is chrome content
+        // passes under (a strip of a kind not recognized above): it gets a
+        // part of the picture rather than being made clear.
+        UIColor* color = EffectiveBackgroundColor(view);
+        if (view.bounds.size.height <= shortHeight && !ColorIsThemeBackground(color, view) &&
+            ColorMatchesTheme(color, view, 0.5)) {
+            if (CanPaint(view, 0.5)) {
+                PaintPiece(view);
+            }
             continue;
         }
         cleared = ClearThemeBackground(view) || cleared;
@@ -1010,8 +1109,21 @@ static BOOL NavigationBarWantsWallpaper(UINavigationBar* bar) {
 // Every layer of the header painted in the theme color gets its part (content
 // passes under it), UIKit's bar background included; bars may be a little
 // translucent. Lists in it (a tab strip's row of tabs) are made clear.
-static void PaintNavigationBar(UINavigationBar* bar, BOOL force) {
+// Changes when any of the bar's views two levels down is replaced, not just
+// when their number changes: X swaps the header's parts (coming back to a tab).
+static NSUInteger BarSignature(UINavigationBar* bar) {
     NSUInteger signature = (Generation << 16) ^ bar.subviews.count;
+    for (UIView* subview in bar.subviews) {
+        signature ^= (NSUInteger)(__bridge void*)subview;
+        for (UIView* inner in subview.subviews) {
+            signature ^= (NSUInteger)(__bridge void*)inner >> 3;
+        }
+    }
+    return signature;
+}
+
+static void PaintNavigationBar(UINavigationBar* bar, BOOL force) {
+    NSUInteger signature = BarSignature(bar);
     NSNumber* last = objc_getAssociatedObject(bar, BarPassKey);
     if (force || !last || last.unsignedIntegerValue != signature) {
         objc_setAssociatedObject(bar, BarPassKey, @(signature), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1069,7 +1181,7 @@ static void AttachTabBarWallpaper(UIViewController* tabBarController) {
         slice.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         objc_setAssociatedObject(background, TabBarWallpaperKey, slice, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    slice.bht_reference = tabBarController.viewIfLoaded;
+    slice.bht_reference = MainContentBack(background) ?: tabBarController.viewIfLoaded;
     UpdateWallpaperView(slice);
     if (slice.superview != host || host.subviews.firstObject != slice) {
         [host insertSubview:slice atIndex:0];
@@ -1086,6 +1198,16 @@ static void RemoveTabBarWallpapers(void) {
         [objc_getAssociatedObject(background, TabBarWallpaperKey) removeFromSuperview];
     }
     [WeakSet(&TabBarBackgroundsStorage) removeAllObjects];
+}
+
+// The backs and parts stay at the bottom of their views as the app's
+// containers lay out.
+static void KeepMainBackInPlace(void) {
+    if (!BarsOn) {
+        return;
+    }
+    UIViewController* appNavigation = AppNavigation;
+    RealignPieces(appNavigation.viewIfLoaded.window);
 }
 
 %hook TFNNavigationBar
@@ -1107,10 +1229,28 @@ static void RemoveTabBarWallpapers(void) {
     if (BarsOn) {
         AttachTabBarWallpaper((UIViewController*)self);
     }
-    // The main content's back, kept at the bottom.
-    if (FullOn && PieceLayer(((UIViewController*)self).view, NO)) {
-        AlignPiece(((UIViewController*)self).view);
-    }
+    KeepMainBackInPlace();
+}
+
+%end
+
+// Records the controller holding the tabs and the sidebar.
+%hook T1TabbedAppNavigationViewController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    AppNavigation = (UIViewController*)self;
+    KeepMainBackInPlace();
+}
+
+%end
+
+// The sidebar's view.
+%hook _TtC11TwitterDash21DashHostingController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    SidebarView = ((UIViewController*)self).viewIfLoaded;
 }
 
 %end
