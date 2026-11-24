@@ -109,7 +109,10 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"default": @30,
                         @"titleKey": @"WATERMARK_OPACITY_TITLE",
                         @"action": @"showWatermarkOpacityPicker:"
-                    }
+                    },
+                    @{@"key": @"background_watermark_bars",
+                      @"parentKey": @"background_watermark",
+                      @"default": @NO}
                 ]
             },
             @"timelines": @{

@@ -360,6 +360,8 @@
 "WATERMARK_OPACITY_TITLE" = "Strength";
 "WATERMARK_OPACITY_MESSAGE" = "Higher shows more of the picture; lower stays closer to the theme's background color.";
 "WATERMARK_OPACITY_FORMAT" = "%ld%%";
+"BACKGROUND_WATERMARK_BARS_TITLE" = "Also behind header and tab bar";
+"BACKGROUND_WATERMARK_BARS_DETAIL" = "Shows the wallpaper behind the header at the top (with its tabs) and the tab bar at the bottom too, as one picture across the whole screen.";
 
 /*Layout*/
 "HIDE_SPACES_TITLE" = "Hide the Spaces bar";

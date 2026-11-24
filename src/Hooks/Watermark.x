@@ -40,10 +40,25 @@
 
         _imageView = [[UIImageView alloc] initWithFrame:self.bounds];
         _imageView.contentMode = UIViewContentModeScaleAspectFill;
-        _imageView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         [self addSubview:_imageView];
     }
     return self;
+}
+
+// The picture is laid out against the whole window, not this view, so the
+// lists and the bars each show their own part of one picture.
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    UIWindow* window = self.window;
+    CGRect frame = window ? [self convertRect:window.bounds fromView:window] : self.bounds;
+    if (!CGRectEqualToRect(self.imageView.frame, frame)) {
+        self.imageView.frame = frame;
+    }
+}
+
+- (void)didMoveToWindow {
+    [super didMoveToWindow];
+    [self setNeedsLayout];
 }
 
 - (UIView*)hitTest:(CGPoint)point withEvent:(UIEvent*)event {
@@ -58,6 +73,8 @@ static const void* OriginalBackgroundKey = &OriginalBackgroundKey;
 
 // Read for every cell shown, so kept here instead of asking the settings.
 static BOOL WallpaperOn;
+// The option to also show it behind the header and the tab bar.
+static BOOL BarsOn;
 
 static NSHashTable* WeakSet(NSHashTable* __strong* storage) {
     if (!*storage) {
@@ -70,6 +87,8 @@ static NSHashTable* SeenControllersStorage;
 static NSHashTable* WallpaperedListsStorage;
 static NSHashTable* HostChangedCellsStorage;
 static NSHashTable* ClearedViewsStorage;
+static NSHashTable* BarBackgroundsStorage;
+static NSHashTable* SeenTabBarControllersStorage;
 
 // MARK: - Theme background
 
@@ -107,7 +126,10 @@ static BOOL ColorIsThemeBackground(UIColor* color, UIView* view) {
 // Some views color their layer directly, leaving the view's color unset.
 static const void* LayerBackgroundKey = &LayerBackgroundKey;
 
-static void ClearThemeBackground(UIView* view) {
+static NSHashTable* BarClearedViewsStorage;
+
+// Remembered in `storage`, so the bars' changes can be undone on their own.
+static void ClearThemeBackgroundInto(UIView* view, NSHashTable* __strong* storage) {
     if (![view isKindOfClass:UIView.class]) {
         return;
     }
@@ -122,12 +144,33 @@ static void ClearThemeBackground(UIView* view) {
     }
     objc_setAssociatedObject(view, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(view, LayerBackgroundKey, layerOnly ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [WeakSet(&ClearedViewsStorage) addObject:view];
+    [WeakSet(storage) addObject:view];
     if (layerOnly) {
         view.layer.backgroundColor = UIColor.clearColor.CGColor;
     } else {
         view.backgroundColor = UIColor.clearColor;
     }
+}
+
+static void ClearThemeBackground(UIView* view) {
+    ClearThemeBackgroundInto(view, &ClearedViewsStorage);
+}
+
+static void RestoreClearedViews(NSHashTable* __strong* storage) {
+    for (UIView* view in WeakSet(storage).allObjects) {
+        UIColor* original = objc_getAssociatedObject(view, OriginalBackgroundKey);
+        if (objc_getAssociatedObject(view, LayerBackgroundKey)) {
+            CGColorRef current = view.layer.backgroundColor;
+            if (original && (!current || CGColorGetAlpha(current) < 0.01)) {
+                view.layer.backgroundColor = [original resolvedColorWithTraitCollection:view.traitCollection].CGColor;
+            }
+        } else if (original && [view.backgroundColor isEqual:UIColor.clearColor]) {
+            view.backgroundColor = original;
+        }
+        objc_setAssociatedObject(view, OriginalBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(view, LayerBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [WeakSet(storage) removeAllObjects];
 }
 
 // Views inside a post painted in the theme's background color: the quoted
@@ -256,6 +299,134 @@ static void PrepareVisibleCells(UIScrollView* list) {
     }
 }
 
+// MARK: - Header and tab bar
+
+// Each bar gets its own part of the picture inside its background view: above
+// the background's color, below the bar's buttons and tabs, which are drawn
+// over the background view. UIKit's own views are never reordered.
+
+static NSString* const kBarsKey = @"background_watermark_bars";
+static const void* BarWallpaperKey = &BarWallpaperKey;
+
+static BOOL IsUIKitBarBackground(UIView* view) {
+    return [NSStringFromClass(view.class) containsString:@"BarBackground"];
+}
+
+// X's header draws its color in its own background view; UIKit's bar
+// background is the fallback.
+static UIView* HeaderBackground(UINavigationBar* bar) {
+    UIView* background = BHTSafeObject(bar, @selector(backgroundView));
+    if ([background isKindOfClass:UIView.class] && !background.hidden && [background isDescendantOfView:bar]) {
+        return background;
+    }
+    for (UIView* subview in bar.subviews) {
+        if (IsUIKitBarBackground(subview)) {
+            return subview;
+        }
+    }
+    return nil;
+}
+
+static UIView* TabBarBackground(UIViewController* tabBarController) {
+    UIView* background = BHTSafeObject(tabBarController, @selector(tabBarBackgroundView));
+    return [background isKindOfClass:UIView.class] ? background : nil;
+}
+
+static void AttachBarWallpaper(UIView* background) {
+    if (!background) {
+        return;
+    }
+    BHTWallpaperView* slice = objc_getAssociatedObject(background, BarWallpaperKey);
+    if (!BarsOn) {
+        [slice removeFromSuperview];
+        return;
+    }
+    if (!slice) {
+        slice = [[BHTWallpaperView alloc] initWithFrame:background.bounds];
+        slice.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        objc_setAssociatedObject(background, BarWallpaperKey, slice, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    UpdateWallpaperView(slice);
+    if (slice.superview != background || background.subviews.lastObject != slice) {
+        [background addSubview:slice];
+    }
+    if (!CGRectEqualToRect(slice.frame, background.bounds)) {
+        slice.frame = background.bounds;
+    }
+    // The bar may have moved (collapsing while scrolling); keep the picture
+    // lined up with the window.
+    [slice setNeedsLayout];
+    [WeakSet(&BarBackgroundsStorage) addObject:background];
+}
+
+static void RemoveBarWallpapers(void) {
+    for (UIView* background in WeakSet(&BarBackgroundsStorage).allObjects) {
+        [objc_getAssociatedObject(background, BarWallpaperKey) removeFromSuperview];
+    }
+    [WeakSet(&BarBackgroundsStorage) removeAllObjects];
+    RestoreClearedViews(&BarClearedViewsStorage);
+}
+
+// Views in the header painted in the theme's color over its background, such
+// as the Home tab strip's container. Once per screen shown, at most 120 views;
+// the backgrounds themselves are left alone (the picture covers them).
+static void ClearHeaderThemeBackgrounds(UINavigationBar* bar) {
+    UIView* background = HeaderBackground(bar);
+    NSMutableArray<UIView*>* queue = [bar.subviews mutableCopy] ?: [NSMutableArray array];
+    for (NSUInteger i = 0; i < queue.count && i < 120; i++) {
+        UIView* view = queue[i];
+        if (view.hidden || view == background || IsUIKitBarBackground(view) ||
+            [view isKindOfClass:BHTWallpaperView.class]) {
+            continue;
+        }
+        ClearThemeBackgroundInto(view, &BarClearedViewsStorage);
+        if ([view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class]) {
+            continue;
+        }
+        [queue addObjectsFromArray:view.subviews];
+    }
+}
+
+static BOOL NavigationBarIsInTab(UINavigationBar* bar) {
+    Class tabNavigationClass = objc_getClass("T1TabNavigationController");
+    id delegate = bar.delegate;
+    return tabNavigationClass && [delegate isKindOfClass:tabNavigationClass];
+}
+
+static void ApplyBarWallpaperForController(UIViewController* controller) {
+    if (!BarsOn || !controller.isViewLoaded) {
+        return;
+    }
+    UINavigationBar* bar = controller.navigationController.navigationBar;
+    if (bar && NavigationBarIsInTab(bar)) {
+        AttachBarWallpaper(HeaderBackground(bar));
+        ClearHeaderThemeBackgrounds(bar);
+    }
+}
+
+%hook TFNNavigationBar
+
+- (void)layoutSubviews {
+    %orig;
+    if (BarsOn && NavigationBarIsInTab((UINavigationBar*)self)) {
+        AttachBarWallpaper(HeaderBackground((UINavigationBar*)self));
+    }
+}
+
+%end
+
+%hook T1TabBarViewController
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    [WeakSet(&SeenTabBarControllersStorage) addObject:(UIViewController*)self];
+    if (BarsOn) {
+        AttachBarWallpaper(TabBarBackground((UIViewController*)self));
+    }
+}
+
+%end
+
 // MARK: - Applying
 
 static void ApplyWallpaperToController(UIViewController* controller) {
@@ -297,30 +468,26 @@ static void RestoreEverything(void) {
     }
     [WeakSet(&HostChangedCellsStorage) removeAllObjects];
 
-    for (UIView* view in WeakSet(&ClearedViewsStorage).allObjects) {
-        UIColor* original = objc_getAssociatedObject(view, OriginalBackgroundKey);
-        if (objc_getAssociatedObject(view, LayerBackgroundKey)) {
-            CGColorRef current = view.layer.backgroundColor;
-            if (original && (!current || CGColorGetAlpha(current) < 0.01)) {
-                view.layer.backgroundColor = [original resolvedColorWithTraitCollection:view.traitCollection].CGColor;
-            }
-        } else if (original && [view.backgroundColor isEqual:UIColor.clearColor]) {
-            view.backgroundColor = original;
-        }
-        objc_setAssociatedObject(view, OriginalBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(view, LayerBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    [WeakSet(&ClearedViewsStorage) removeAllObjects];
+    RestoreClearedViews(&ClearedViewsStorage);
+    RemoveBarWallpapers();
 }
 
 static void ApplyWallpaperChange(void) {
     WallpaperOn = BHTWatermark.active;
+    BarsOn = WallpaperOn && [BHTSettings boolForKey:kBarsKey];
     if (!WallpaperOn) {
         RestoreEverything();
         return;
     }
+    if (!BarsOn) {
+        RemoveBarWallpapers();
+    }
     for (UIViewController* controller in WeakSet(&SeenControllersStorage).allObjects) {
         ApplyWallpaperToController(controller);
+        ApplyBarWallpaperForController(controller);
+    }
+    for (UIViewController* tabBarController in WeakSet(&SeenTabBarControllersStorage).allObjects) {
+        AttachBarWallpaper(TabBarBackground(tabBarController));
     }
 }
 
@@ -331,6 +498,7 @@ static void ApplyWallpaperChange(void) {
     [WeakSet(&SeenControllersStorage) addObject:(UIViewController*)self];
     if (WallpaperOn) {
         ApplyWallpaperToController((UIViewController*)self);
+        ApplyBarWallpaperForController((UIViewController*)self);
     }
 }
 
@@ -357,6 +525,7 @@ static void ApplyWallpaperChange(void) {
 %ctor {
     %init;
     WallpaperOn = BHTWatermark.active;
+    BarsOn = WallpaperOn && [BHTSettings boolForKey:kBarsKey];
     [NSNotificationCenter.defaultCenter addObserverForName:BHTWatermarkDidChangeNotification
                                                     object:nil
                                                      queue:NSOperationQueue.mainQueue

@@ -286,7 +286,7 @@
 - (void)switchChanged:(UISwitch*)sender {
     [super switchChanged:sender];
     NSString* key = objc_getAssociatedObject(sender, @"prefKey");
-    if ([key isEqualToString:@"background_watermark"]) {
+    if ([key isEqualToString:@"background_watermark"] || [key isEqualToString:@"background_watermark_bars"]) {
         [BHTWatermark postChange];
     } else if ([key isEqualToString:@"tab_bar_theming"]) {
         dispatch_async(dispatch_get_main_queue(), ^{
