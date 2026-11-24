@@ -63,19 +63,28 @@ static UIView* AlignmentReference(UIView* view) {
     return fallback ?: window;
 }
 
-// Where the picture goes in `view`'s coordinates.
-static CGRect PictureFrame(UIView* view) {
+// Where the picture goes in `view`'s coordinates, measured where things are
+// on screen right now: mid-animation (a swipe back, a screen being pushed,
+// the sidebar sliding) the presentation layers have the moving positions the
+// views' own frames don't. `reference` overrides the lookup (the tab bar,
+// which isn't inside the main content but moves with it).
+static CGRect PictureFrameFor(UIView* view, UIView* reference) {
     UIWindow* window = view.window;
-    UIView* reference = AlignmentReference(view);
+    if (!reference || reference.window != window) {
+        reference = AlignmentReference(view);
+    }
     if (!window || !reference) {
         return view.bounds;
     }
     CGRect picture = CGRectMake(0, 0, window.bounds.size.width, window.bounds.size.height);
-    return [view convertRect:picture fromView:reference];
+    CALayer* from = reference.layer.presentationLayer ?: reference.layer;
+    CALayer* to = view.layer.presentationLayer ?: view.layer;
+    return [from convertRect:picture toLayer:to];
 }
 
 @interface BHTWallpaperView : UIView
 @property (nonatomic, strong) UIImageView* imageView;
+@property (nonatomic, weak) UIView* bht_reference;
 - (void)bht_align;
 @end
 
@@ -103,9 +112,17 @@ static NSHashTable* WallpaperViewsStorage;
 }
 
 - (void)bht_align {
-    CGRect frame = PictureFrame(self);
+    if (!self.window) {
+        return;
+    }
+    CGRect frame = PictureFrameFor(self, self.bht_reference);
+    CGPoint origin = self.layer.bounds.origin;
+    frame = CGRectOffset(frame, -origin.x, -origin.y);
     if (!CGRectEqualToRect(self.imageView.frame, frame)) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
         self.imageView.frame = frame;
+        [CATransaction commit];
     }
 }
 
@@ -372,7 +389,9 @@ static void AlignPaintedView(UIView* view) {
         container.frame = layer.bounds;
     }
     CALayer* picture = container.sublayers.firstObject;
-    CGRect frame = PictureFrame(view);
+    // In the container's coordinates, which start at the layer's bounds origin.
+    CGRect frame = PictureFrameFor(view, nil);
+    frame = CGRectOffset(frame, -container.frame.origin.x, -container.frame.origin.y);
     if (!CGRectEqualToRect(picture.frame, frame)) {
         picture.frame = frame;
     }
@@ -517,7 +536,10 @@ static BOOL IsHostList(UIScrollView* list) {
 
 // MARK: - Cells
 
-static void PrepareCellContents(UIView* cell) {
+// The cell's own background: cheap enough to check on every layout, since X
+// can restyle a visible cell (coming back from an opened post) without
+// reusing it.
+static void PrepareCellSurface(UIView* cell) {
     SEL hostGetter = @selector(hostProvidesBackground);
     SEL hostSetter = @selector(setHostProvidesBackground:);
     if ([cell respondsToSelector:hostSetter] && !BHTSafeBool(cell, hostGetter)) {
@@ -526,10 +548,14 @@ static void PrepareCellContents(UIView* cell) {
     }
 
     ClearThemeBackground(cell);
-    UIView* contentView = [cell respondsToSelector:@selector(contentView)] ? [(id)cell contentView] : nil;
-    ClearThemeBackground(contentView);
+    ClearThemeBackground([cell respondsToSelector:@selector(contentView)] ? [(id)cell contentView] : nil);
     ClearThemeBackground([cell respondsToSelector:@selector(backgroundView)] ? [(id)cell backgroundView] : nil);
     ClearThemeBackground(nfb_objectIvar(cell, "_backgroundView"));
+}
+
+static void PrepareCellContents(UIView* cell) {
+    PrepareCellSurface(cell);
+    UIView* contentView = [cell respondsToSelector:@selector(contentView)] ? [(id)cell contentView] : nil;
 
     UIView* statusView = BHTSafeObject(cell, @selector(statusView));
     if ([statusView isKindOfClass:UIView.class] && [statusView isDescendantOfView:cell]) {
@@ -551,10 +577,12 @@ static void PrepareCell(UIView* cell, UIScrollView* list) {
     objc_setAssociatedObject(cell, CellPassKey, @(PaintGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
-// From a host list's layout: once per cell until it's reused.
+// From a host list's layout: the surface every time, the inside once per cell
+// until it's reused.
 static void PrepareCellOnce(UIView* cell) {
     NSNumber* pass = objc_getAssociatedObject(cell, CellPassKey);
     if (pass && pass.unsignedIntegerValue == PaintGeneration) {
+        PrepareCellSurface(cell);
         return;
     }
     objc_setAssociatedObject(cell, CellPassKey, @(PaintGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -583,7 +611,7 @@ static void PaintTree(UIView* root, NSUInteger limit, CGFloat minAlpha) {
     NSMutableArray<UIView*>* queue = [NSMutableArray arrayWithObject:root];
     for (NSUInteger i = 0; i < queue.count && i < limit; i++) {
         UIView* view = queue[i];
-        if (view.hidden || view.alpha < 0.01 || [view isKindOfClass:BHTWallpaperView.class]) {
+        if ([view isKindOfClass:BHTWallpaperView.class]) {
             continue;
         }
         if (IsList(view)) {
@@ -711,8 +739,11 @@ static UIView* TabBarBackground(UIViewController* tabBarController) {
 }
 
 // A part of the picture at the bottom of the tab bar's background view, below
-// anything in it (the icons may be), unless the view draws itself.
-static void AttachTabBarWallpaper(UIView* background) {
+// anything in it (the icons may be), unless the view draws itself. It's laid
+// out against the tab bar controller's view: the tab bar isn't inside the main
+// content, and against itself it would show the top of the picture.
+static void AttachTabBarWallpaper(UIViewController* tabBarController) {
+    UIView* background = TabBarBackground(tabBarController);
     if (!background) {
         return;
     }
@@ -729,6 +760,7 @@ static void AttachTabBarWallpaper(UIView* background) {
         slice.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         objc_setAssociatedObject(background, TabBarWallpaperKey, slice, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
+    slice.bht_reference = tabBarController.viewIfLoaded;
     UpdateWallpaperView(slice);
     if (slice.superview != host || host.subviews.firstObject != slice) {
         [host insertSubview:slice atIndex:0];
@@ -764,7 +796,7 @@ static void RemoveTabBarWallpapers(void) {
     %orig;
     [WeakSet(&SeenTabBarControllersStorage) addObject:(UIViewController*)self];
     if (BarsOn) {
-        AttachTabBarWallpaper(TabBarBackground((UIViewController*)self));
+        AttachTabBarWallpaper((UIViewController*)self);
     }
 }
 
@@ -954,6 +986,64 @@ static void RestoreEverything(void) {
     RemoveTabBarWallpapers();
 }
 
+// MARK: - Every frame
+
+// Keeps every part of the picture lined up while things move without laying
+// out: a swipe back, a screen being pushed, the sidebar sliding, a tab
+// switch. Runs only with the bars or "every screen" option on, measures from
+// where things are on screen, and only touches parts that moved.
+@interface BHTWallpaperTicker : NSObject
+@end
+
+static CADisplayLink* WallpaperDisplayLink;
+
+static void RealignEverything(void) {
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    for (UIView* view in WeakSet(&PaintedViewsStorage).allObjects) {
+        if (view.window) {
+            AlignPaintedView(view);
+        }
+    }
+    for (BHTWallpaperView* wallpaper in WallpaperViewsStorage.allObjects) {
+        if (wallpaper.window) {
+            [wallpaper bht_align];
+        }
+    }
+    // Coming back to a screen, X can drop a list's background view; the
+    // picture goes back in. One X replaced with its own view is left alone.
+    for (UIScrollView* list in WeakSet(&WallpaperedListsStorage).allObjects) {
+        BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
+        if (list.window && wallpaper && !ListBackgroundView(list)) {
+            SetListBackgroundView(list, wallpaper);
+        }
+    }
+    [CATransaction commit];
+}
+
+@implementation BHTWallpaperTicker
+
+- (void)tick:(CADisplayLink*)link {
+    RealignEverything();
+}
+
+@end
+
+static void UpdateTicker(void) {
+    BOOL wanted = WallpaperOn && (FullOn || BarsOn);
+    if (wanted && !WallpaperDisplayLink) {
+        static BHTWallpaperTicker* ticker;
+        if (!ticker) {
+            ticker = [BHTWallpaperTicker new];
+        }
+        WallpaperDisplayLink = [CADisplayLink displayLinkWithTarget:ticker selector:@selector(tick:)];
+        [WallpaperDisplayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+    } else if (!wanted && WallpaperDisplayLink) {
+        [WallpaperDisplayLink invalidate];
+        WallpaperDisplayLink = nil;
+    }
+}
+
 static void ReadWallpaperOptions(void) {
     WallpaperOn = BHTWatermark.active;
     FullOn = WallpaperOn && [BHTSettings boolForKey:kFullKey];
@@ -962,6 +1052,7 @@ static void ReadWallpaperOptions(void) {
 
 static void ApplyWallpaperChange(void) {
     ReadWallpaperOptions();
+    UpdateTicker();
     PaintGeneration++;
     if (!WallpaperOn) {
         RestoreEverything();
@@ -985,7 +1076,7 @@ static void ApplyWallpaperChange(void) {
         ApplyBarWallpaperForController(controller);
     }
     for (UIViewController* tabBarController in WeakSet(&SeenTabBarControllersStorage).allObjects) {
-        AttachTabBarWallpaper(TabBarBackground(tabBarController));
+        AttachTabBarWallpaper(tabBarController);
     }
     if (FullOn) {
         PaintAllScreens();
@@ -1026,6 +1117,9 @@ static void ApplyWallpaperChange(void) {
 %ctor {
     %init;
     ReadWallpaperOptions();
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UpdateTicker();
+    });
     [NSNotificationCenter.defaultCenter addObserverForName:BHTWatermarkDidChangeNotification
                                                     object:nil
                                                      queue:NSOperationQueue.mainQueue
