@@ -33,9 +33,53 @@
 #import "HookHelpers.h"
 #import "Core/BHTWatermark.h"
 
+// MARK: - Alignment
+
+// What the picture is laid out against: the app's main content (the tab bar
+// controller's view), which slides as one piece when the sidebar opens, so
+// the picture slides with it. Outside it (the sidebar, sheets) the nearest
+// view directly under the root view or the window. The picture is the size of
+// the window, anchored at that view's top left.
+static UIView* AlignmentReference(UIView* view) {
+    UIWindow* window = view.window;
+    if (!window) {
+        return nil;
+    }
+    static Class tabBarControllerClass;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        tabBarControllerClass = objc_getClass("T1TabBarViewController");
+    });
+    UIView* rootView = window.rootViewController.viewIfLoaded;
+    UIView* fallback = nil;
+    for (UIView* ancestor = view; ancestor && ancestor != window; ancestor = ancestor.superview) {
+        if (tabBarControllerClass && [ancestor.nextResponder isKindOfClass:tabBarControllerClass]) {
+            return ancestor;
+        }
+        if (!fallback && (ancestor.superview == rootView || ancestor.superview == window)) {
+            fallback = ancestor;
+        }
+    }
+    return fallback ?: window;
+}
+
+// Where the picture goes in `view`'s coordinates.
+static CGRect PictureFrame(UIView* view) {
+    UIWindow* window = view.window;
+    UIView* reference = AlignmentReference(view);
+    if (!window || !reference) {
+        return view.bounds;
+    }
+    CGRect picture = CGRectMake(0, 0, window.bounds.size.width, window.bounds.size.height);
+    return [view convertRect:picture fromView:reference];
+}
+
 @interface BHTWallpaperView : UIView
 @property (nonatomic, strong) UIImageView* imageView;
+- (void)bht_align;
 @end
+
+static NSHashTable* WallpaperViewsStorage;
 
 @implementation BHTWallpaperView
 
@@ -49,18 +93,25 @@
         _imageView = [[UIImageView alloc] initWithFrame:self.bounds];
         _imageView.contentMode = UIViewContentModeScaleAspectFill;
         [self addSubview:_imageView];
+
+        if (!WallpaperViewsStorage) {
+            WallpaperViewsStorage = [NSHashTable weakObjectsHashTable];
+        }
+        [WallpaperViewsStorage addObject:self];
     }
     return self;
 }
 
-// The picture is laid out against the whole window, not this view.
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    UIWindow* window = self.window;
-    CGRect frame = window ? [self convertRect:window.bounds fromView:window] : self.bounds;
+- (void)bht_align {
+    CGRect frame = PictureFrame(self);
     if (!CGRectEqualToRect(self.imageView.frame, frame)) {
         self.imageView.frame = frame;
     }
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self bht_align];
 }
 
 - (void)didMoveToWindow {
@@ -86,6 +137,7 @@ static const void* ScreenPassKey = &ScreenPassKey;
 static const void* HostListKey = &HostListKey;
 static const void* ListExtrasPassKey = &ListExtrasPassKey;
 static const void* CellPassKey = &CellPassKey;
+static const void* ListCheckKey = &ListCheckKey;
 static const void* BarPassKey = &BarPassKey;
 static const void* TabBarWallpaperKey = &TabBarWallpaperKey;
 
@@ -157,11 +209,22 @@ static BOOL ColorMatchesTheme(UIColor* color, UIView* view, CGFloat minAlpha) {
                                                                             alpha:&a2]) {
         return NO;
     }
-    return a1 >= minAlpha && fabs(r1 - r2) < 0.02 && fabs(g1 - g2) < 0.02 && fabs(b1 - b2) < 0.02;
+    return a1 >= minAlpha && fabs(r1 - r2) < 0.03 && fabs(g1 - g2) < 0.03 && fabs(b1 - b2) < 0.03;
 }
 
+// Strips, empty states and other chrome often use the theme color slightly
+// translucent.
 static BOOL ColorIsThemeBackground(UIColor* color, UIView* view) {
-    return ColorMatchesTheme(color, view, 0.98);
+    return ColorMatchesTheme(color, view, 0.85);
+}
+
+// The view's color, or its layer's when it colors the layer directly.
+static UIColor* EffectiveBackgroundColor(UIView* view) {
+    UIColor* color = view.backgroundColor;
+    if (!color && view.layer.backgroundColor) {
+        color = [UIColor colorWithCGColor:view.layer.backgroundColor];
+    }
+    return color;
 }
 
 // MARK: - Making views clear (cells)
@@ -269,7 +332,7 @@ static BOOL CanPaint(UIView* view, CGFloat minAlpha) {
     if (![view isKindOfClass:UIImageView.class] && ViewDrawsItself(view)) {
         return NO;
     }
-    return ColorMatchesTheme(view.backgroundColor, view, minAlpha);
+    return ColorMatchesTheme(EffectiveBackgroundColor(view), view, minAlpha);
 }
 
 // The view's part of the picture: a clipping layer in the theme color,
@@ -309,7 +372,7 @@ static void AlignPaintedView(UIView* view) {
         container.frame = layer.bounds;
     }
     CALayer* picture = container.sublayers.firstObject;
-    CGRect frame = [view convertRect:window.bounds fromView:window];
+    CGRect frame = PictureFrame(view);
     if (!CGRectEqualToRect(picture.frame, frame)) {
         picture.frame = frame;
     }
@@ -351,8 +414,9 @@ static void PaintView(UIView* view) {
     AlignPaintedView(view);
 }
 
-// Lines up every painted view in a window again; called as lists scroll and
-// bars and screens lay out.
+// Lines up every painted view and wallpaper view in a window again; called as
+// lists scroll and bars and screens lay out. Parts that move with the content
+// (the sidebar sliding it) don't change, since they're laid out against it.
 static void RealignPaintedViews(UIWindow* window) {
     if (!window) {
         return;
@@ -360,6 +424,11 @@ static void RealignPaintedViews(UIWindow* window) {
     for (UIView* view in WeakSet(&PaintedViewsStorage).allObjects) {
         if (view.window == window) {
             AlignPaintedView(view);
+        }
+    }
+    for (BHTWallpaperView* wallpaper in WallpaperViewsStorage.allObjects) {
+        if (wallpaper.window == window) {
+            [wallpaper bht_align];
         }
     }
 }
@@ -565,7 +634,7 @@ static void PaintListExtras(UIScrollView* list) {
             subview == background || [subview isKindOfClass:BHTWallpaperView.class]) {
             continue;
         }
-        PaintTree(subview, 80, 0.98);
+        PaintTree(subview, 80, 0.5);
     }
 }
 
@@ -754,7 +823,7 @@ static void PaintController(UIViewController* controller, BOOL force) {
     NSNumber* last = objc_getAssociatedObject(root, ScreenPassKey);
     if (force || !last || last.unsignedIntegerValue != signature) {
         objc_setAssociatedObject(root, ScreenPassKey, @(signature), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        PaintTree(root, 200, 0.98);
+        PaintTree(root, 200, 0.5);
     }
     RealignPaintedViews(window);
 }
@@ -799,12 +868,33 @@ static void PaintAllScreens(void) {
 
 %end
 
+// A list not taken over yet is looked at again whenever its height changes:
+// one seen before it was laid out (zero-sized, as search results can be on
+// their first pass) gets its turn once it has a size.
+static void ConsiderList(UIScrollView* list) {
+    NSUInteger signature = (PaintGeneration << 16) ^ (NSUInteger)list.bounds.size.height;
+    NSNumber* last = objc_getAssociatedObject(list, ListCheckKey);
+    if (last && last.unsignedIntegerValue == signature) {
+        return;
+    }
+    objc_setAssociatedObject(list, ListCheckKey, @(signature), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    HostList(list);
+}
+
+static void ListDidLayout(UIScrollView* list) {
+    if (IsHostList(list)) {
+        ServiceHostList(list, NO);
+    } else {
+        ConsiderList(list);
+    }
+}
+
 %hook UITableView
 
 - (void)layoutSubviews {
     %orig;
-    if (FullOn && IsHostList(self)) {
-        ServiceHostList(self, NO);
+    if (FullOn) {
+        ListDidLayout(self);
     }
 }
 
@@ -814,8 +904,8 @@ static void PaintAllScreens(void) {
 
 - (void)layoutSubviews {
     %orig;
-    if (FullOn && IsHostList(self)) {
-        ServiceHostList(self, NO);
+    if (FullOn) {
+        ListDidLayout(self);
     }
 }
 
