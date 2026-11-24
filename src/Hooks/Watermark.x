@@ -29,7 +29,11 @@
 //     clear they'd show at once, so they cross-fade alongside the slide
 //     (UIKit runs the fades with the slide, swipes back included), without
 //     UIKit's dark veil over the one underneath.
-//   - Views made clear stay clear when X sets their color again.
+//   - X paints its theme colors through setters it calls again whenever the
+//     look changes. A view made clear stays clear in that same call; any
+//     other view given the theme's background color is handled right before
+//     the frame is drawn, and X reloading its colors gets a full pass then
+//     too, so nothing shows in the theme color first.
 //
 //  "Header and tab bar": just those parts, over the normal app.
 //
@@ -101,15 +105,28 @@ static BOOL IsAppWindow(UIWindow* window) {
 
 // MARK: - Theme background
 
+// X's palette (TAEColorSettings → the current TAEColorPalette) hands out its
+// colors as objects that follow the theme, and TFNDynamicColorManager records
+// every setter they're passed to (setBackgroundColor: and the like). When the
+// look changes (a new theme, light/dark, iOS flipping the look for its
+// snapshots while the app is in the background), it calls those setters again
+// with the new colors. So X paints the theme color back on views at those
+// moments, and everything here goes through setBackgroundColor:.
+static UIColor* ThemeColorCache;
+static CFTimeInterval ThemeColorReadAt;
+
 static UIColor* ThemeBackgroundColor(void) {
-    static UIColor* cached;
-    static CFTimeInterval readAt;
     CFTimeInterval now = CACurrentMediaTime();
-    if (!cached || now - readAt > 1.0) {
-        cached = [Palette currentBackgroundColor];
-        readAt = now;
+    if (!ThemeColorCache || now - ThemeColorReadAt > 1.0) {
+        ThemeColorCache = [Palette currentBackgroundColor];
+        ThemeColorReadAt = now;
     }
-    return cached;
+    return ThemeColorCache;
+}
+
+// The palette changed: read it again on the next use.
+static void ForgetThemeColor(void) {
+    ThemeColorCache = nil;
 }
 
 // The theme's background color, at least `minAlpha` opaque.
@@ -139,13 +156,12 @@ static BOOL ColorIsThemeBackground(UIColor* color, UIView* view) {
     return ColorMatchesTheme(color, view, 0.85);
 }
 
-// The view's color, or its layer's when it colors the layer directly.
+// The color the view actually draws: its layer's. X answers `backgroundColor`
+// with the color it recorded for the view, which isn't what's drawn once the
+// view was made clear.
 static UIColor* EffectiveBackgroundColor(UIView* view) {
-    UIColor* color = view.backgroundColor;
-    if (!color && view.layer.backgroundColor) {
-        color = [UIColor colorWithCGColor:view.layer.backgroundColor];
-    }
-    return color;
+    CGColorRef drawn = view.layer.backgroundColor;
+    return drawn ? [UIColor colorWithCGColor:drawn] : nil;
 }
 
 // MARK: - Making views clear
@@ -156,14 +172,16 @@ static BOOL ClearThemeColor(UIView* view, CGFloat minAlpha) {
     if (![view isKindOfClass:UIView.class]) {
         return NO;
     }
-    UIColor* color = view.backgroundColor;
-    BOOL layerOnly = NO;
-    if (!color && view.layer.backgroundColor) {
-        color = [UIColor colorWithCGColor:view.layer.backgroundColor];
-        layerOnly = YES;
-    }
-    if (!ColorMatchesTheme(color, view, minAlpha)) {
+    UIColor* drawn = EffectiveBackgroundColor(view);
+    if (!ColorMatchesTheme(drawn, view, minAlpha)) {
         return NO;
+    }
+    // What X set (a color that follows the theme), to put back; or the layer's
+    // own color when X colors the layer directly.
+    UIColor* color = view.backgroundColor;
+    BOOL layerOnly = !color;
+    if (layerOnly) {
+        color = drawn;
     }
     objc_setAssociatedObject(view, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(view, LayerBackgroundKey, layerOnly ? @YES : nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -187,16 +205,30 @@ static BOOL KeepsClear(UIView* view) {
     return generation && generation.unsignedIntegerValue == Generation;
 }
 
-// X sets a view's color again when it restyles it (coming back to a screen
-// or a tab, the app returning to the foreground, the sidebar closing). A
-// view made clear stays clear, in the same pass, so it never flashes back.
+// Views X painted in the theme color since the last pass, handled before
+// the frame is drawn (see ProcessThemedViews).
+static NSHashTable* ThemedViewsStorage;
+static BOOL ThemedViewsPending;
+
+// Every time X (or anything) gives a view the theme's background color:
+// - a view made clear stays clear, in the same call, so it never flashes
+//   back (X calls the setter again whenever the look changes);
+// - any other view is noted, and gets made clear or its part of the picture
+//   before the frame is drawn.
 %hook UIView
 
 - (void)setBackgroundColor:(UIColor*)color {
-    if (WallpaperOn && color && KeepsClear(self) && ColorMatchesTheme(color, self, 0.5)) {
-        objc_setAssociatedObject(self, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        %orig(UIColor.clearColor);
-        return;
+    if (WallpaperOn && color) {
+        BOOL keepsClear = KeepsClear(self);
+        if ((keepsClear || BarsOn) && ColorMatchesTheme(color, self, 0.5)) {
+            if (keepsClear) {
+                objc_setAssociatedObject(self, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                %orig(UIColor.clearColor);
+                return;
+            }
+            [WeakSet(&ThemedViewsStorage) addObject:self];
+            ThemedViewsPending = YES;
+        }
     }
     %orig;
 }
@@ -207,13 +239,16 @@ static void RestoreClearedViews(void) {
     for (UIView* view in WeakSet(&ClearedViewsStorage).allObjects) {
         objc_setAssociatedObject(view, KeepClearKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         UIColor* original = objc_getAssociatedObject(view, OriginalBackgroundKey);
-        if (objc_getAssociatedObject(view, LayerBackgroundKey)) {
-            CGColorRef current = view.layer.backgroundColor;
-            if (original && (!current || CGColorGetAlpha(current) < 0.01)) {
+        // Judged by what's drawn: X may answer `backgroundColor` with the
+        // color it recorded.
+        CGColorRef current = view.layer.backgroundColor;
+        BOOL drawnClear = !current || CGColorGetAlpha(current) < 0.01;
+        if (original && drawnClear) {
+            if (objc_getAssociatedObject(view, LayerBackgroundKey)) {
                 view.layer.backgroundColor = [original resolvedColorWithTraitCollection:view.traitCollection].CGColor;
+            } else {
+                view.backgroundColor = original;
             }
-        } else if (original && [view.backgroundColor isEqual:UIColor.clearColor]) {
-            view.backgroundColor = original;
         }
         objc_setAssociatedObject(view, OriginalBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(view, LayerBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -995,7 +1030,7 @@ static BOOL MakeListClear(UIScrollView* list) {
     if (IsHostList(list)) {
         return NO;
     }
-    UIColor* color = list.backgroundColor;
+    UIColor* color = EffectiveBackgroundColor(list);
     BOOL alreadyClear = !color || CGColorGetAlpha(color.CGColor) < 0.01;
     BOOL cleared = NO;
     if (!alreadyClear) {
@@ -1005,7 +1040,8 @@ static BOOL MakeListClear(UIScrollView* list) {
         cleared = ClearThemeBackground(list);
         if (!cleared) {
             // Slightly translucent theme colors under the clearing bar.
-            objc_setAssociatedObject(list, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(list, OriginalBackgroundKey, list.backgroundColor ?: color,
+                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             objc_setAssociatedObject(list, KeepClearKey, @(Generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [WeakSet(&ClearedViewsStorage) addObject:list];
             list.backgroundColor = UIColor.clearColor;
@@ -1077,6 +1113,7 @@ static void ClearAllScreens(void) {
 
 static void ScheduleSettlePass(UIViewController* controller);
 static void RecoverFadedScreen(UIViewController* controller);
+static void ProcessThemedViews(BOOL beforeDrawing);
 
 %hook UIViewController
 
@@ -1085,6 +1122,8 @@ static void RecoverFadedScreen(UIViewController* controller);
     if (FullOn) {
         ClearController(self, NO);
     }
+    // What X painted while laying this screen out, in the same frame.
+    ProcessThemedViews(NO);
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -1792,6 +1831,175 @@ static void ReapplyAfterForeground(void) {
     });
 }
 
+// MARK: - Following X's colors
+
+// X reloaded its colors: everything again, before the frame is drawn.
+static BOOL FullPassPending;
+
+static void ThemeReloaded(void) {
+    ForgetThemeColor();
+    if (WallpaperOn) {
+        FullPassPending = YES;
+    }
+}
+
+// The view holding the tab bar's own picture, when `view` is part of the tab
+// bar (the tab bar controller's view, only the bar's size).
+static UIView* TabBarHostHolding(UIView* view) {
+    for (UIViewController* controller in WeakSet(&SeenTabBarControllersStorage).allObjects) {
+        UIView* background = TabBarBackground(controller);
+        UIView* bar = controller.viewIfLoaded;
+        if (!background || !bar) {
+            continue;
+        }
+        UIView* host = [background isKindOfClass:UIVisualEffectView.class]
+                           ? ((UIVisualEffectView*)background).contentView
+                           : background;
+        BOOL barSized = bar.window && bar.bounds.size.height <= bar.window.bounds.size.height * 0.25;
+        if ((barSized && [view isDescendantOfView:bar]) || [view isDescendantOfView:background]) {
+            return host;
+        }
+    }
+    return nil;
+}
+
+// One view X just painted in the theme color, handled as the full passes
+// would: a part of the picture in the header, the tab strips and short
+// translucent bars; clear elsewhere in "every screen" mode, and inside
+// cells of lists showing the picture.
+static void ApplyToThemedView(UIView* view) {
+    UIWindow* window = view.window;
+    if (!IsAppWindow(window) || [view isKindOfClass:BHTWallpaperView.class]) {
+        return;
+    }
+    UIColor* color = EffectiveBackgroundColor(view);
+    if (!ColorMatchesTheme(color, view, 0.5)) {
+        return;
+    }
+    // Its own part of the picture already covers its color.
+    if (PieceLayer(view, NO).superlayer == view.layer) {
+        AlignPiece(view);
+        return;
+    }
+    // The tab bar: views over its picture are made clear; the bar's own
+    // views below the picture keep their color.
+    UIView* tabBarHost = TabBarHostHolding(view);
+    if (tabBarHost) {
+        if (view != tabBarHost && [view isDescendantOfView:tabBarHost]) {
+            for (UIView* ancestor = view; ancestor && ancestor != tabBarHost; ancestor = ancestor.superview) {
+                if ([ancestor isKindOfClass:BHTWallpaperView.class]) {
+                    return;
+                }
+            }
+            ClearThemeColor(view, 0.5);
+        }
+        return;
+    }
+    for (UIView* ancestor = view; ancestor && ancestor != window; ancestor = ancestor.superview) {
+        if ([ancestor isKindOfClass:BHTWallpaperView.class]) {
+            return;
+        }
+        // Inside a list that keeps its own color, nothing changes.
+        if (ancestor != view && IsList(ancestor) && !IsHostList((UIScrollView*)ancestor) &&
+            !ListHasWallpaper((UIScrollView*)ancestor)) {
+            return;
+        }
+        if (IsTabStrip(ancestor)) {
+            PaintStrip(ancestor, YES);
+            return;
+        }
+        if ([ancestor isKindOfClass:UINavigationBar.class]) {
+            if (NavigationBarWantsWallpaper((UINavigationBar*)ancestor) && CanPaint(view, 0.5)) {
+                PaintPiece(view);
+            }
+            return;
+        }
+        if (ancestor != view &&
+            ([ancestor isKindOfClass:UITableViewCell.class] || [ancestor isKindOfClass:UICollectionViewCell.class])) {
+            UIView* list = ancestor.superview;
+            while (list && !IsList(list)) {
+                list = list.superview;
+            }
+            if (list && (IsHostList((UIScrollView*)list) || ListHasWallpaper((UIScrollView*)list))) {
+                ClearThemeBackground(view);
+            }
+            return;
+        }
+    }
+    if (!FullOn) {
+        return;
+    }
+    if (IsList(view)) {
+        MakeListClear((UIScrollView*)view);
+        return;
+    }
+    // A short bar: the strip it holds, or its own part when it's slightly
+    // translucent (content passes under it).
+    if (view.bounds.size.height <= window.bounds.size.height * 0.25) {
+        NSArray<UIView*>* strips = StripsIn(view, 30);
+        if (strips.count) {
+            for (UIView* strip in strips) {
+                PaintStrip(strip, YES);
+            }
+            return;
+        }
+        if (!ColorIsThemeBackground(color, view)) {
+            if (CanPaint(view, 0.5)) {
+                PaintPiece(view);
+            }
+            return;
+        }
+    }
+    if (ClearThemeBackground(view)) {
+        EnsureBack(view);
+    }
+}
+
+// Runs right before Core Animation draws each frame (and as screens lay
+// out), so whatever X painted in the theme color in this pass, its color
+// reloads included, is handled before it's ever seen. The full pass after a
+// color reload only runs before drawing, not in the middle of a layout.
+static void ProcessThemedViews(BOOL beforeDrawing) {
+    if (beforeDrawing && FullPassPending) {
+        FullPassPending = NO;
+        ReapplyWallpaper();
+    }
+    if (!ThemedViewsPending) {
+        return;
+    }
+    ThemedViewsPending = NO;
+    NSArray<UIView*>* views = WeakSet(&ThemedViewsStorage).allObjects;
+    [WeakSet(&ThemedViewsStorage) removeAllObjects];
+    if (!BarsOn) {
+        return;
+    }
+    for (UIView* view in views) {
+        ApplyToThemedView(view);
+    }
+}
+
+%group ColorReloads
+%hook TFNDynamicColorManager
+
+- (void)reloadDynamicColors {
+    %orig;
+    ThemeReloaded();
+}
+
+%end
+%end
+
+%group PaletteChanges
+%hook TAEColorSettings
+
+- (void)applyCurrentColorPalette {
+    %orig;
+    ThemeReloaded();
+}
+
+%end
+%end
+
 %hook TFNItemsDataViewController
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -1829,7 +2037,23 @@ static void ReapplyAfterForeground(void) {
     if (objc_getClass("_TtC10TFNUISwift29SegmentedTabsBarContainerView")) {
         %init(StripContainer);
     }
+    if (objc_getClass("TFNDynamicColorManager")) {
+        %init(ColorReloads);
+    }
+    if (objc_getClass("TAEColorSettings")) {
+        %init(PaletteChanges);
+    }
     ReadWallpaperOptions();
+
+    // After UIKit's own before-commit work (1999000) and before Core
+    // Animation commits the frame (2000000).
+    CFRunLoopObserverRef observer = CFRunLoopObserverCreateWithHandler(
+        kCFAllocatorDefault, kCFRunLoopBeforeWaiting | kCFRunLoopExit, true, 1999500,
+        ^(CFRunLoopObserverRef runLoopObserver, CFRunLoopActivity activity) {
+            ProcessThemedViews(YES);
+        });
+    CFRunLoopAddObserver(CFRunLoopGetMain(), observer, kCFRunLoopCommonModes);
+    CFRelease(observer);
     [NSNotificationCenter.defaultCenter addObserverForName:BHTWatermarkDidChangeNotification
                                                     object:nil
                                                      queue:NSOperationQueue.mainQueue
