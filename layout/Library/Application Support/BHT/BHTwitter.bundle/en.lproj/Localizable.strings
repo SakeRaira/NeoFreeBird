@@ -362,6 +362,8 @@
 "WATERMARK_OPACITY_FORMAT" = "%ld%%";
 "BACKGROUND_WATERMARK_BARS_TITLE" = "Also behind header and tab bar";
 "BACKGROUND_WATERMARK_BARS_DETAIL" = "Shows the wallpaper behind the header at the top (with its tabs) and the tab bar at the bottom too, as one picture across the whole screen.";
+"BACKGROUND_WATERMARK_FULL_TITLE" = "Show on every screen";
+"BACKGROUND_WATERMARK_FULL_DETAIL" = "Uses the wallpaper as the background of every screen painted in the theme's background color, such as settings, menus and the composer, header and tab bar included. Each screen stays opaque, so screens behind it never show through.";
 
 /*Layout*/
 "HIDE_SPACES_TITLE" = "Hide the Spaces bar";

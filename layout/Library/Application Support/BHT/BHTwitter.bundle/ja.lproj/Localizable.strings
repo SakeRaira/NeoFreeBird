@@ -362,6 +362,8 @@
 "WATERMARK_OPACITY_FORMAT" = "%ld%%";
 "BACKGROUND_WATERMARK_BARS_TITLE" = "ヘッダとタブバーにも表示";
 "BACKGROUND_WATERMARK_BARS_DETAIL" = "画面上部のヘッダ（タブの切り替えを含む）と下部のタブバーの背景にも壁紙を表示し、画面全体で1枚の画像としてつながるようにします。";
+"BACKGROUND_WATERMARK_FULL_TITLE" = "すべての画面に表示";
+"BACKGROUND_WATERMARK_FULL_DETAIL" = "設定やメニュー、投稿画面など、テーマの背景色で塗られたすべての画面の背景を壁紙にします。ヘッダとタブバーにも表示されます。各画面は不透明なままなので、後ろの画面が透けることはありません。";
 
 /*Layout*/
 "HIDE_SPACES_TITLE" = "スペースを非表示";
