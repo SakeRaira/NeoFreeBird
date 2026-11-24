@@ -343,8 +343,8 @@
 "SIDEBAR_ITEMS_ON_TAB_BAR" = "On the navigation bar";
 "SIDEBAR_ITEMS_SHOW_ALL" = "Show all";
 
-"BACKGROUND_WATERMARK_TITLE" = "Background picture";
-"BACKGROUND_WATERMARK_DETAIL" = "Shows a picture you choose faintly over the timelines and other tab screens, like a watermark. It stays in place while you scroll.";
+"BACKGROUND_WATERMARK_TITLE" = "Wallpaper";
+"BACKGROUND_WATERMARK_DETAIL" = "Shows a picture you choose behind the timelines and other tab screens. Posts and icons stay on top of it, and it stays in place while you scroll.";
 "WATERMARK_IMAGE_TITLE" = "Picture";
 "WATERMARK_IMAGE_NONE" = "None";
 "WATERMARK_IMAGE_SET" = "Set";
@@ -352,7 +352,7 @@
 "WATERMARK_IMAGE_REMOVE" = "Remove picture";
 "WATERMARK_IMAGE_FAILED" = "Couldn't save the picture";
 "WATERMARK_OPACITY_TITLE" = "Strength";
-"WATERMARK_OPACITY_MESSAGE" = "The higher the number, the more visible the picture.";
+"WATERMARK_OPACITY_MESSAGE" = "Higher shows more of the picture; lower stays closer to the theme's background color.";
 "WATERMARK_OPACITY_FORMAT" = "%ld%%";
 
 /*Layout*/

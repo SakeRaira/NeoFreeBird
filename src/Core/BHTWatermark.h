@@ -2,9 +2,9 @@
 //  BHTWatermark.h
 //  NeoFreeBird
 //
-//  A picture of the user's choosing shown faintly over the app's tab screens,
-//  like a watermark (Watermark.x draws it). Stores the picture and how
-//  strongly it shows.
+//  A picture of the user's choosing shown as the wallpaper behind the app's
+//  tab screens (Watermark.x draws it). Stores the picture and how strongly it
+//  shows through the theme's background color.
 //
 
 #import <UIKit/UIKit.h>

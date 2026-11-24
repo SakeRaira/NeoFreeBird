@@ -12,7 +12,7 @@ NSNotificationName const BHTWatermarkDidChangeNotification = @"BHTWatermarkDidCh
 static NSString* const kEnabledKey = @"background_watermark";
 static NSString* const kOpacityKey = @"background_watermark_opacity";
 static NSString* const kSummaryKey = @"background_watermark_image_summary";
-static const NSInteger kDefaultOpacity = 15;
+static const NSInteger kDefaultOpacity = 30;
 
 // Loaded once and shared by every screen; reset when the picture changes.
 static UIImage* CachedImage;
@@ -40,8 +40,13 @@ static BOOL CachedImageLoaded;
     return CachedImage;
 }
 
+// Doesn't decode the picture, so it's safe before the app has a screen.
 + (BOOL)active {
-    return [BHTSettings boolForKey:kEnabledKey] && self.image != nil;
+    if (![BHTSettings boolForKey:kEnabledKey]) {
+        return NO;
+    }
+    return CachedImageLoaded ? CachedImage != nil
+                             : [NSFileManager.defaultManager fileExistsAtPath:self.filePath];
 }
 
 + (NSInteger)opacityPercent {
@@ -56,7 +61,7 @@ static BOOL CachedImageLoaded;
 }
 
 + (NSArray<NSNumber*>*)opacityChoices {
-    return @[@5, @10, @15, @20, @25, @30, @40, @50, @70];
+    return @[@10, @20, @30, @40, @50, @60, @70, @80, @100];
 }
 
 // No larger than the screen in pixels, so a camera photo doesn't sit in

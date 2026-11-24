@@ -90,7 +90,7 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"prefKeyForSubtitle": @"bhtwitter_font_2",
                         @"subtitleDefaultKey": @"FONT_SYSTEM_DEFAULT_SUBTITLE"
                     },
-                    // A picture shown faintly over the tab screens (BHTWatermark).
+                    // A wallpaper behind the tab screens (BHTWatermark).
                     @{@"key": @"background_watermark",
                       @"default": @NO},
                     @{
@@ -106,7 +106,7 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"type": @"compactButton",
                         @"parentKey": @"background_watermark",
                         @"key": @"background_watermark_opacity",
-                        @"default": @15,
+                        @"default": @30,
                         @"titleKey": @"WATERMARK_OPACITY_TITLE",
                         @"action": @"showWatermarkOpacityPicker:"
                     }

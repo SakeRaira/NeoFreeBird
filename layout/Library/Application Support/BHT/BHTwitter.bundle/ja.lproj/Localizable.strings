@@ -343,8 +343,8 @@
 "SIDEBAR_ITEMS_ON_TAB_BAR" = "ナビゲーションバーに表示中";
 "SIDEBAR_ITEMS_SHOW_ALL" = "すべて表示";
 
-"BACKGROUND_WATERMARK_TITLE" = "背景に画像を表示";
-"BACKGROUND_WATERMARK_DETAIL" = "選んだ画像を、タイムラインなどのタブの画面に透かしとして薄く重ねて表示します。スクロールしても画像は動きません。";
+"BACKGROUND_WATERMARK_TITLE" = "壁紙を設定";
+"BACKGROUND_WATERMARK_DETAIL" = "選んだ画像を、タイムラインなどのタブの画面の背景に表示します。投稿やアイコンは画像の上に表示され、スクロールしても画像は動きません。";
 "WATERMARK_IMAGE_TITLE" = "画像";
 "WATERMARK_IMAGE_NONE" = "未設定";
 "WATERMARK_IMAGE_SET" = "設定済み";
@@ -352,7 +352,7 @@
 "WATERMARK_IMAGE_REMOVE" = "画像を削除";
 "WATERMARK_IMAGE_FAILED" = "画像を保存できませんでした";
 "WATERMARK_OPACITY_TITLE" = "画像の濃さ";
-"WATERMARK_OPACITY_MESSAGE" = "数字が大きいほど、画像がはっきり表示されます。";
+"WATERMARK_OPACITY_MESSAGE" = "数字が大きいほど画像がはっきり見え、小さいほどテーマの背景色に近くなります。";
 "WATERMARK_OPACITY_FORMAT" = "%ld%%";
 
 /*Layout*/
