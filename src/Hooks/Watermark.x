@@ -65,6 +65,7 @@ static const void* ScrollHoldsPieceKey = &ScrollHoldsPieceKey;
 static const void* StripPassKey = &StripPassKey;
 static const void* FadeAlphaKey = &FadeAlphaKey;
 static const void* FadeTransitionKey = &FadeTransitionKey;
+static const void* FadeNavigationKey = &FadeNavigationKey;
 static const void* ScreenNormalAlphaKey = &ScreenNormalAlphaKey;
 static const void* KeepClearKey = &KeepClearKey;
 
@@ -1250,6 +1251,7 @@ static void RestoreFade(UIView* view) {
     }
     objc_setAssociatedObject(view, FadeAlphaKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(view, FadeTransitionKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, FadeNavigationKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [WeakSet(&FadingViewsStorage) removeObject:view];
     [UIView performWithoutAnimation:^{
         view.alpha = original.doubleValue;
@@ -1351,6 +1353,9 @@ static void FadeAlongside(UINavigationController* navigationController,
     }
     objc_setAssociatedObject(view, FadeAlphaKey, @(original), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(view, FadeTransitionKey, transition, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, FadeNavigationKey,
+                             [NSValue valueWithPointer:(__bridge const void*)navigationController],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     if ([view.nextResponder isKindOfClass:UIViewController.class]) {
         objc_setAssociatedObject(view, ScreenNormalAlphaKey, @(original), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [WeakSet(&FadedScreensStorage) addObject:view];
@@ -1394,12 +1399,49 @@ static UIView* HeaderAccessoryOf(UIViewController* controller) {
     return nil;
 }
 
-static void CrossFadeScreens(UINavigationController* navigationController) {
+// UIKit's own coordinator for a navigation controller's transition. X's tab
+// navigation controller answers transitionCoordinator with one of its own,
+// which can still be an earlier transition's (right after a post was
+// opened), so UIKit's is asked directly.
+static id<UIViewControllerTransitionCoordinator> UIKitTransitionCoordinator(UINavigationController* navigationController) {
+    static IMP uikitGetter;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        uikitGetter = [UINavigationController instanceMethodForSelector:@selector(transitionCoordinator)];
+    });
+    return uikitGetter ? ((id (*)(id, SEL))uikitGetter)(navigationController, @selector(transitionCoordinator)) : nil;
+}
+
+// The coordinator of the push or pop that just started: UIKit's or X's,
+// whichever really moves `expectedFrom` (the screen being popped) or
+// `expectedTo` (the screen being pushed).
+static id<UIViewControllerTransitionCoordinator> CoordinatorFor(UINavigationController* navigationController,
+                                                                 UIViewController* expectedFrom,
+                                                                 UIViewController* expectedTo) {
+    id<UIViewControllerTransitionCoordinator> candidates[2] = {
+        UIKitTransitionCoordinator(navigationController), navigationController.transitionCoordinator};
+    for (int i = 0; i < 2; i++) {
+        id<UIViewControllerTransitionCoordinator> coordinator = candidates[i];
+        if (!coordinator || !coordinator.isAnimated) {
+            continue;
+        }
+        UIViewController* from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
+        UIViewController* to = [coordinator viewControllerForKey:UITransitionContextToViewControllerKey];
+        if ((!expectedFrom || from == expectedFrom) && (!expectedTo || to == expectedTo)) {
+            return coordinator;
+        }
+    }
+    return nil;
+}
+
+static void CrossFadeScreens(UINavigationController* navigationController, UIViewController* expectedFrom,
+                             UIViewController* expectedTo) {
     if (!FullOn) {
         return;
     }
-    id<UIViewControllerTransitionCoordinator> coordinator = navigationController.transitionCoordinator;
-    if (!coordinator || !coordinator.isAnimated) {
+    id<UIViewControllerTransitionCoordinator> coordinator =
+        CoordinatorFor(navigationController, expectedFrom, expectedTo);
+    if (!coordinator) {
         return;
     }
     UIViewController* from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
@@ -1497,7 +1539,7 @@ static void SettleTransitions(void) {
         return;
     }
     for (UINavigationController* navigationController in WeakSet(&FadingNavigationsStorage).allObjects) {
-        if (navigationController.transitionCoordinator) {
+        if (UIKitTransitionCoordinator(navigationController)) {
             return;
         }
     }
@@ -1509,39 +1551,62 @@ static void SettleTransitions(void) {
     ShowShades(WeakSet(&HiddenShadesStorage).allObjects);
 }
 
+// X's navigation controller finished its own transition animation (done or
+// cancelled): every fade it started ends now.
+static void EndNavigationFades(UINavigationController* navigationController) {
+    NSValue* navigation = [NSValue valueWithPointer:(__bridge const void*)navigationController];
+    for (UIView* view in WeakSet(&FadingViewsStorage).allObjects) {
+        if ([objc_getAssociatedObject(view, FadeNavigationKey) isEqual:navigation]) {
+            RestoreFade(view);
+        }
+    }
+    ShowShades(WeakSet(&HiddenShadesStorage).allObjects);
+}
+
 %hook UINavigationController
 
 - (void)pushViewController:(UIViewController*)viewController animated:(BOOL)animated {
     %orig;
     if (animated) {
-        CrossFadeScreens(self);
+        CrossFadeScreens(self, nil, viewController);
     }
 }
 
 - (UIViewController*)popViewControllerAnimated:(BOOL)animated {
     UIViewController* popped = %orig;
-    if (animated) {
-        CrossFadeScreens(self);
+    if (animated && popped) {
+        CrossFadeScreens(self, popped, nil);
     }
     return popped;
 }
 
 - (NSArray*)popToViewController:(UIViewController*)viewController animated:(BOOL)animated {
     NSArray* popped = %orig;
-    if (animated) {
-        CrossFadeScreens(self);
+    if (animated && popped.count) {
+        CrossFadeScreens(self, popped.lastObject, viewController);
     }
     return popped;
 }
 
 - (NSArray*)popToRootViewControllerAnimated:(BOOL)animated {
     NSArray* popped = %orig;
-    if (animated) {
-        CrossFadeScreens(self);
+    if (animated && popped.count) {
+        CrossFadeScreens(self, popped.lastObject, self.viewControllers.firstObject);
     }
     return popped;
 }
 
+%end
+
+%group TFNTransitions
+%hook TFNNavigationController
+
+- (void)_tfn_transitionAnimationCompletedIsCanceled:(BOOL)canceled isPush:(BOOL)push {
+    %orig;
+    EndNavigationFades((UINavigationController*)self);
+}
+
+%end
 %end
 
 // MARK: - Header and tab bar
@@ -2234,6 +2299,9 @@ static void ProcessThemedViews(BOOL beforeDrawing) {
     }
     if (objc_getClass("TFNDynamicColorManager")) {
         %init(ColorReloads);
+    }
+    if (objc_getClass("TFNNavigationController")) {
+        %init(TFNTransitions);
     }
     if (objc_getClass("TAEColorSettings")) {
         %init(PaletteChanges);
