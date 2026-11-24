@@ -4,7 +4,9 @@
 //
 //  Wallpaper: the chosen picture (BHTWatermark) behind the timelines, and
 //  optionally the bars and every screen. Every part of it is laid out against
-//  the window, so all the parts line up as one picture.
+//  the app's main content, so all the parts line up as one picture and slide
+//  together with the sidebar; scrolling and screen slides keep it still (see
+//  "Swipes").
 //
 //  Timelines: each timeline list gets the picture as its backgroundView
 //  (drawn behind the cells, fixed while scrolling), and its cells are made
@@ -63,11 +65,11 @@ static UIView* AlignmentReference(UIView* view) {
     return fallback ?: window;
 }
 
-// Where the picture goes in `view`'s coordinates, measured where things are
-// on screen right now: mid-animation (a swipe back, a screen being pushed,
-// the sidebar sliding) the presentation layers have the moving positions the
-// views' own frames don't. `reference` overrides the lookup (the tab bar,
-// which isn't inside the main content but moves with it).
+// Where the picture goes in `view`'s coordinates, from the views' own frames
+// (where things settle). It's worked out during layout, in step with whatever
+// moved them, so scrolling keeps it still without lag; animated slides get a
+// counter-animation instead (below). `reference` overrides the lookup (the
+// tab bar, which isn't inside the main content but moves with it).
 static CGRect PictureFrameFor(UIView* view, UIView* reference) {
     UIWindow* window = view.window;
     if (!reference || reference.window != window) {
@@ -77,9 +79,7 @@ static CGRect PictureFrameFor(UIView* view, UIView* reference) {
         return view.bounds;
     }
     CGRect picture = CGRectMake(0, 0, window.bounds.size.width, window.bounds.size.height);
-    CALayer* from = reference.layer.presentationLayer ?: reference.layer;
-    CALayer* to = view.layer.presentationLayer ?: view.layer;
-    return [from convertRect:picture toLayer:to];
+    return [view convertRect:picture fromView:reference];
 }
 
 @interface BHTWallpaperView : UIView
@@ -179,6 +179,9 @@ static NSHashTable* ClearedViewsStorage;
 static NSHashTable* TabBarBackgroundsStorage;
 static NSHashTable* SeenTabBarControllersStorage;
 static NSHashTable* PaintedViewsStorage;
+
+// Defined with the swipe handling below.
+static void MarkScrollAncestors(UIView* view);
 
 static BOOL IsList(UIView* view) {
     return [view isKindOfClass:UITableView.class] || [view isKindOfClass:UICollectionView.class];
@@ -430,6 +433,7 @@ static void PaintView(UIView* view) {
     [CATransaction commit];
 
     [WeakSet(&PaintedViewsStorage) addObject:view];
+    MarkScrollAncestors(view);
     AlignPaintedView(view);
 }
 
@@ -526,6 +530,8 @@ static void ApplyListWallpaper(UIScrollView* list) {
     UpdateWallpaperView(wallpaper);
     SetListBackgroundView(list, wallpaper);
     [WeakSet(&WallpaperedListsStorage) addObject:list];
+    // Pagers holding this list keep its picture still while they page.
+    MarkScrollAncestors(list);
 }
 
 // A list taken over in "every screen" mode, in the current generation.
@@ -670,6 +676,12 @@ static void PaintListExtras(UIScrollView* list) {
 // cells are made clear once, the extras painted when they change, and painted
 // views lined up again.
 static void ServiceHostList(UIScrollView* list, BOOL force) {
+    // Coming back to a screen, X can drop a list's background view; the
+    // picture goes back in. One X replaced with its own view is left alone.
+    BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
+    if (wallpaper && !ListBackgroundView(list)) {
+        SetListBackgroundView(list, wallpaper);
+    }
     if ([list respondsToSelector:@selector(visibleCells)]) {
         for (UIView* cell in [(id)list visibleCells]) {
             PrepareCellOnce(cell);
@@ -986,63 +998,157 @@ static void RestoreEverything(void) {
     RemoveTabBarWallpapers();
 }
 
-// MARK: - Every frame
+// MARK: - Swipes
 
-// Keeps every part of the picture lined up while things move without laying
-// out: a swipe back, a screen being pushed, the sidebar sliding, a tab
-// switch. Runs only with the bars or "every screen" option on, measures from
-// where things are on screen, and only touches parts that moved.
-@interface BHTWallpaperTicker : NSObject
-@end
+// Two kinds of movement keep the picture still behind moving content:
+//
+// Scrolling (paging between a profile's or the notifications' tabs, and any
+// other swipe made of a scroll view): the parts are lined up again as the
+// scroll view moves, during the same layout pass, so there's no lag. Scroll
+// views holding a painted part are marked when it's painted.
+//
+// Animated slides (opening a post, swiping back, a sheet coming up): UIKit
+// moves the screen with a position animation and its frame is already the
+// final one, so there's nothing to line up during the slide. Each part under
+// the sliding layer gets the opposite animation with the same timing, and
+// Core Animation itself keeps it still on screen. A slide of the whole app
+// (the sidebar moves the main content the picture is laid out against) gets
+// none, so the picture goes with it.
 
-static CADisplayLink* WallpaperDisplayLink;
+static const void* ScrollHoldsWallpaperKey = &ScrollHoldsWallpaperKey;
+static BOOL AddingCounterAnimation;
 
-static void RealignEverything(void) {
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    for (UIView* view in WeakSet(&PaintedViewsStorage).allObjects) {
-        if (view.window) {
-            AlignPaintedView(view);
+static void MarkScrollAncestors(UIView* view) {
+    for (UIView* ancestor = view.superview; ancestor; ancestor = ancestor.superview) {
+        if ([ancestor isKindOfClass:UIScrollView.class] &&
+            !objc_getAssociatedObject(ancestor, ScrollHoldsWallpaperKey)) {
+            objc_setAssociatedObject(ancestor, ScrollHoldsWallpaperKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
+    }
+}
+
+static void ScrollViewMoved(UIScrollView* scrollView) {
+    if (WallpaperOn && (FullOn || BarsOn) && objc_getAssociatedObject(scrollView, ScrollHoldsWallpaperKey)) {
+        RealignPaintedViews(scrollView.window);
+    }
+}
+
+%hook UIScrollView
+
+- (void)setContentOffset:(CGPoint)offset {
+    %orig;
+    ScrollViewMoved(self);
+}
+
+- (void)layoutSubviews {
+    %orig;
+    ScrollViewMoved(self);
+}
+
+%end
+
+static BOOL LayerIsAncestorOrSelf(CALayer* ancestor, CALayer* layer) {
+    for (CALayer* current = layer; current; current = current.superlayer) {
+        if (current == ancestor) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+// A displacement in `from`'s superlayer, expressed in `space`.
+static CGPoint ConvertOffset(CGPoint offset, CALayer* from, CALayer* space) {
+    CALayer* source = from.superlayer;
+    CGPoint origin = [source convertPoint:CGPointZero toLayer:space];
+    CGPoint moved = [source convertPoint:offset toLayer:space];
+    return CGPointMake(moved.x - origin.x, moved.y - origin.y);
+}
+
+static void CounterAnimate(CALayer* picture, CALayer* animated, CABasicAnimation* animation, NSString* key,
+                           CGPoint startOffset, CGPoint endOffset) {
+    CALayer* space = picture.superlayer;
+    if (!space || !animated.superlayer) {
+        return;
+    }
+    CGPoint start = ConvertOffset(startOffset, animated, space);
+    CGPoint end = ConvertOffset(endOffset, animated, space);
+    CABasicAnimation* counter = [animation copy];
+    counter.keyPath = @"position";
+    counter.additive = YES;
+    counter.delegate = nil;
+    counter.fromValue = [NSValue valueWithCGPoint:CGPointMake(-start.x, -start.y)];
+    counter.toValue = [NSValue valueWithCGPoint:CGPointMake(-end.x, -end.y)];
+    counter.byValue = nil;
+    NSString* counterKey = [NSString stringWithFormat:@"bht.wallpaper.%p.%@", animated, key ?: @"position"];
+    AddingCounterAnimation = YES;
+    [picture addAnimation:counter forKey:counterKey];
+    AddingCounterAnimation = NO;
+}
+
+// A position animation on `animated`: every painted part and wallpaper view
+// under it, but above the view its picture is laid out against, gets the
+// opposite one.
+static void CounterAnimatePosition(CALayer* animated, CABasicAnimation* animation, NSString* key) {
+    NSValue* fromValue = animation.fromValue;
+    NSValue* toValue = animation.toValue;
+    if (![fromValue isKindOfClass:NSValue.class] || ![toValue isKindOfClass:NSValue.class] ||
+        strcmp(fromValue.objCType, @encode(CGPoint)) != 0 || strcmp(toValue.objCType, @encode(CGPoint)) != 0) {
+        return;
+    }
+    // How far the layer is from where it settles, at the start and the end.
+    CGPoint from = fromValue.CGPointValue;
+    CGPoint to = toValue.CGPointValue;
+    CGPoint startOffset = from;
+    CGPoint endOffset = to;
+    if (!animation.additive) {
+        CGPoint model = animated.position;
+        startOffset = CGPointMake(from.x - model.x, from.y - model.y);
+        endOffset = CGPointMake(to.x - model.x, to.y - model.y);
+    }
+    if (CGPointEqualToPoint(startOffset, CGPointZero) && CGPointEqualToPoint(endOffset, CGPointZero)) {
+        return;
+    }
+
+    for (UIView* view in WeakSet(&PaintedViewsStorage).allObjects) {
+        CALayer* container = PaintLayer(view, NO);
+        if (!view.window || container.superlayer != view.layer || !LayerIsAncestorOrSelf(animated, view.layer)) {
+            continue;
+        }
+        UIView* reference = AlignmentReference(view);
+        if (!reference || LayerIsAncestorOrSelf(animated, reference.layer)) {
+            continue;
+        }
+        AlignPaintedView(view);
+        CounterAnimate(container.sublayers.firstObject, animated, animation, key, startOffset, endOffset);
     }
     for (BHTWallpaperView* wallpaper in WallpaperViewsStorage.allObjects) {
-        if (wallpaper.window) {
-            [wallpaper bht_align];
+        if (!wallpaper.window || !LayerIsAncestorOrSelf(animated, wallpaper.layer)) {
+            continue;
         }
-    }
-    // Coming back to a screen, X can drop a list's background view; the
-    // picture goes back in. One X replaced with its own view is left alone.
-    for (UIScrollView* list in WeakSet(&WallpaperedListsStorage).allObjects) {
-        BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
-        if (list.window && wallpaper && !ListBackgroundView(list)) {
-            SetListBackgroundView(list, wallpaper);
+        UIView* reference = wallpaper.bht_reference.window == wallpaper.window ? wallpaper.bht_reference
+                                                                              : AlignmentReference(wallpaper);
+        if (!reference || LayerIsAncestorOrSelf(animated, reference.layer)) {
+            continue;
         }
-    }
-    [CATransaction commit];
-}
-
-@implementation BHTWallpaperTicker
-
-- (void)tick:(CADisplayLink*)link {
-    RealignEverything();
-}
-
-@end
-
-static void UpdateTicker(void) {
-    BOOL wanted = WallpaperOn && (FullOn || BarsOn);
-    if (wanted && !WallpaperDisplayLink) {
-        static BHTWallpaperTicker* ticker;
-        if (!ticker) {
-            ticker = [BHTWallpaperTicker new];
-        }
-        WallpaperDisplayLink = [CADisplayLink displayLinkWithTarget:ticker selector:@selector(tick:)];
-        [WallpaperDisplayLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
-    } else if (!wanted && WallpaperDisplayLink) {
-        [WallpaperDisplayLink invalidate];
-        WallpaperDisplayLink = nil;
+        [wallpaper bht_align];
+        CounterAnimate(wallpaper.imageView.layer, animated, animation, key, startOffset, endOffset);
     }
 }
+
+%hook CALayer
+
+- (void)addAnimation:(CAAnimation*)animation forKey:(NSString*)key {
+    %orig;
+    if (!WallpaperOn || AddingCounterAnimation || ![animation isKindOfClass:CABasicAnimation.class]) {
+        return;
+    }
+    CABasicAnimation* basic = (CABasicAnimation*)animation;
+    if ([basic.keyPath isEqualToString:@"position"]) {
+        CounterAnimatePosition(self, basic, key);
+    }
+}
+
+%end
 
 static void ReadWallpaperOptions(void) {
     WallpaperOn = BHTWatermark.active;
@@ -1052,7 +1158,6 @@ static void ReadWallpaperOptions(void) {
 
 static void ApplyWallpaperChange(void) {
     ReadWallpaperOptions();
-    UpdateTicker();
     PaintGeneration++;
     if (!WallpaperOn) {
         RestoreEverything();
@@ -1117,9 +1222,6 @@ static void ApplyWallpaperChange(void) {
 %ctor {
     %init;
     ReadWallpaperOptions();
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UpdateTicker();
-    });
     [NSNotificationCenter.defaultCenter addObserverForName:BHTWatermarkDidChangeNotification
                                                     object:nil
                                                      queue:NSOperationQueue.mainQueue
