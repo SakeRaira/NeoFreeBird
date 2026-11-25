@@ -756,9 +756,12 @@ static void RemovePortalSources(void) {
     [WeakSet(&PortalSourcesStorage) removeAllObjects];
 }
 
-// Whether `view`'s part mirrors the window's wallpaper.
+// Whether `view`'s part mirrors the window's wallpaper. A blur's tint (the
+// collapsed profile header) doesn't: X's blur draws what's inside it on its
+// own, where a portal shows nothing and the part's theme color showed. It
+// keeps its own picture, held still through slides like any other.
 static BOOL PieceUsesPortal(UIView* view) {
-    if (!PortalOn) {
+    if (!PortalOn || objc_getAssociatedObject(view, TintAlphaKey)) {
         return NO;
     }
     UIWindow* window = view.window;
