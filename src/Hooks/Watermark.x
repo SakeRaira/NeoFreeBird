@@ -39,6 +39,17 @@
 //
 //  "Header and tab bar": just those parts, over the normal app.
 //
+//  "Mirror the wallpaper": the parts show a portal to one wallpaper fixed at
+//  the back of the window instead of a picture of their own (see "Mirrored
+//  parts").
+//
+//  "Keep X's own transitions" (with every screen): each screen, the sidebar
+//  and the main content also get a mirrored plate of the wallpaper at their
+//  bottom, so they cover each other as in the app and X's own animations
+//  run untouched: no cross-fades and no sidebar fade, and X's dimming
+//  overlay shows the wallpaper instead of black (see "Plates under
+//  screens").
+//
 //  Theme colors are cleared on views' backgrounds only (X also uses the color
 //  for text and outlines). Every change is remembered and undone when
 //  switched off. UIKit's views are never reordered; parts are layers.
@@ -51,6 +62,7 @@
 static NSString* const kBarsKey = @"background_watermark_bars";
 static NSString* const kFullKey = @"background_watermark_full";
 static NSString* const kPortalKey = @"background_watermark_portal";
+static NSString* const kPlatesKey = @"background_watermark_plates";
 
 static const void* ListWallpaperKey = &ListWallpaperKey;
 static const void* ListOriginalBackgroundViewKey = &ListOriginalBackgroundViewKey;
@@ -79,6 +91,7 @@ static const void* TransitionWindowKey = &TransitionWindowKey;
 static const void* ScreenNormalAlphaKey = &ScreenNormalAlphaKey;
 static const void* KeepClearKey = &KeepClearKey;
 static const void* PortalSourceKey = &PortalSourceKey;
+static const void* ScreenPlateKey = &ScreenPlateKey;
 
 // Read on hot paths, so kept here instead of asking the settings.
 static BOOL WallpaperOn;
@@ -87,6 +100,9 @@ static BOOL FullOn;
 // Parts mirror one wallpaper fixed to the window instead of holding their
 // own picture (the "Mirror the wallpaper" option).
 static BOOL PortalOn;
+// Screens get plates and keep X's own transitions (the "Keep X's own
+// transitions" option, with every screen).
+static BOOL PlatesOn;
 // Bumped on every change; marks from an older one are stale.
 static NSUInteger Generation = 1;
 
@@ -106,6 +122,7 @@ static NSHashTable* SeenTabBarControllersStorage;
 static NSHashTable* PiecesStorage;
 static NSHashTable* WallpaperViewsStorage;
 static NSHashTable* PortalSourcesStorage;
+static NSHashTable* ScreenPlatesStorage;
 
 static BOOL IsList(UIView* view) {
     return [view isKindOfClass:UITableView.class] || [view isKindOfClass:UICollectionView.class];
@@ -1197,11 +1214,78 @@ static void PrepareVisibleCells(UIScrollView* list) {
     }
 }
 
+// MARK: - Plates under screens (the "Keep X's own transitions" option)
+
+// With the option on, each screen (one of a navigation controller's), the
+// sidebar and the main content get a mirrored part of the wallpaper at their
+// bottom, a plate: the clear views in them show the wallpaper on it, and they
+// cover each other again as in the app. A new screen sliding in hides the
+// one under it, a swipe back uncovers it, the sidebar waits under the content
+// out of sight, all with X's own animations as they are, so nothing is faded.
+// Plates are mirrored, so they stay with the wallpaper while their screen
+// moves; in a sheet or modal they're pictures laid out against it instead.
+
+static void PaintPlate(UIView* view) {
+    UIWindow* window = view.window;
+    if (!window || !IsAppWindow(window)) {
+        return;
+    }
+    NSNumber* painted = objc_getAssociatedObject(view, ScreenPlateKey);
+    if (painted && painted.unsignedIntegerValue == Generation && PieceLayer(view, NO).superlayer == view.layer) {
+        return;
+    }
+    // A screen in a color of its own (a black media screen) keeps it: the
+    // plate would cover it. Clear ones and theme-colored ones get theirs.
+    UIColor* color = EffectiveBackgroundColor(view);
+    if (color && CGColorGetAlpha(color.CGColor) >= 0.01 && !ColorMatchesTheme(color, view, 0.01)) {
+        return;
+    }
+    objc_setAssociatedObject(view, PlateKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(view, ScreenPlateKey, @(Generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    [WeakSet(&ScreenPlatesStorage) addObject:view];
+    if ([view isKindOfClass:UIScrollView.class]) {
+        // Its part moves with its bounds: lined up again as it scrolls.
+        objc_setAssociatedObject(view, ScrollHoldsPieceKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    PaintPiece(view);
+}
+
+// Something in `view`'s screen was made clear: the screens holding it get
+// their plates (an inner navigation controller's screen and the one it's
+// in).
+static void PlateScreensHolding(UIView* view) {
+    if (!PlatesOn || IsInsideSeeThroughPresentation(view)) {
+        return;
+    }
+    UIWindow* window = view.window;
+    for (UIView* ancestor = view; ancestor && ancestor != window; ancestor = ancestor.superview) {
+        UIResponder* responder = ancestor.nextResponder;
+        if (![responder isKindOfClass:UIViewController.class]) {
+            continue;
+        }
+        UIViewController* controller = (UIViewController*)responder;
+        if (controller.viewIfLoaded == ancestor &&
+            [controller.parentViewController isKindOfClass:UINavigationController.class]) {
+            PaintPlate(ancestor);
+        }
+    }
+}
+
+// The plates' marks, taken off with the parts.
+static void ForgetScreenPlates(void) {
+    for (UIView* view in WeakSet(&ScreenPlatesStorage).allObjects) {
+        objc_setAssociatedObject(view, PlateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(view, ScreenPlateKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    [WeakSet(&ScreenPlatesStorage) removeAllObjects];
+}
+
 // MARK: - Every screen: clear views over a back
 
 // The back a view shows through to: a part of the picture painted at the
-// bottom of its alignment reference.
+// bottom of its alignment reference (and, with plates, its screen's plate).
 static void EnsureBack(UIView* view) {
+    PlateScreensHolding(view);
     UIView* back = BackViewFor(view);
     if (back && back != view.window && ![back isKindOfClass:UIScrollView.class] &&
         !IsInsideSeeThroughPresentation(back)) {
@@ -1935,7 +2019,8 @@ static BOOL UsesTransitionOverlay(UINavigationController* navigationController) 
 
 static void CrossFadeScreens(UINavigationController* navigationController, UIViewController* expectedFrom,
                              UIViewController* expectedTo) {
-    if (!FullOn || UsesTransitionOverlay(navigationController)) {
+    // With plates the screens cover each other by themselves.
+    if (!FullOn || PlatesOn || UsesTransitionOverlay(navigationController)) {
         return;
     }
     id<UIViewControllerTransitionCoordinator> coordinator =
@@ -2153,7 +2238,8 @@ static void EndNavigationFades(UINavigationController* navigationController) {
 // covered by the wallpaper as a new one slides in over it, and uncovered as
 // a swipe back goes on. The screens' own alpha is never touched there, so
 // X's transition code (which also rearranges the header) finds them as it
-// left them.
+// left them. With plates the screens cover each other, so the overlay keeps
+// X's own strength and nothing else is added.
 
 // The overlay in the theme color, fully covering at its strongest; X's own
 // color is put back when the mode is off.
@@ -2440,6 +2526,11 @@ static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> 
     HoldPiecesStillDuringSlide(transition);
     objc_setAssociatedObject(self, TransitionWindowKey, [NSValue valueWithNonretainedObject:transition.containerView.window],
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // With plates X's animation runs as it is: only its overlay shows the
+    // wallpaper, at X's own strength. No overlay or fade of our own.
+    if (PlatesOn) {
+        return;
+    }
     long long operation = [(id)self respondsToSelector:@selector(operation)]
                               ? ((long long (*)(id, SEL))objc_msgSend)(self, @selector(operation))
                               : 0;
@@ -2462,11 +2553,11 @@ static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> 
 }
 
 - (double)_tfn_maximumAlphaForTransition:(id)transition {
-    return FullOn ? 1.0 : %orig;
+    return FullOn && !PlatesOn ? 1.0 : %orig;
 }
 
 - (BOOL)suppressDimming {
-    return FullOn ? NO : %orig;
+    return FullOn && !PlatesOn ? NO : %orig;
 }
 
 %end
@@ -2834,11 +2925,12 @@ static void ClearSidebarOverlays(UIViewController* split) {
 }
 
 // The sidebar's alpha follows how far it's open in "every screen" mode, so it
-// isn't seen through the clear content while it waits.
+// isn't seen through the clear content while it waits. With plates the
+// content covers it instead, as in the app.
 static void UpdateSidebarFade(UIViewController* split) {
     ClearSidebarOverlays(split);
     UIView* sidebar = SidebarOf(split);
-    if (FullOn && sidebar && IsAppWindow(sidebar.window) && SidebarWaitsBehindContent(split, sidebar)) {
+    if (FullOn && !PlatesOn && sidebar && IsAppWindow(sidebar.window) && SidebarWaitsBehindContent(split, sidebar)) {
         FadedSidebar = sidebar;
         SetSidebarAlpha(split, sidebar, SidebarOpenFraction(split, sidebar));
         return;
@@ -2850,9 +2942,25 @@ static void UpdateSidebarFade(UIViewController* split) {
     }
 }
 
+// With plates: the main content's and the sidebar's.
+static void PaintAppPlates(UIViewController* split) {
+    if (!PlatesOn || !split) {
+        return;
+    }
+    UIView* content = objectIvar(split, "_contentHostView");
+    if ([content isKindOfClass:UIView.class]) {
+        PaintPlate(content);
+    }
+    UIView* sidebar = SidebarOf(split);
+    if (sidebar) {
+        PaintPlate(sidebar);
+    }
+}
+
 static void SidebarMoved(UIViewController* split) {
     AppSplit = split;
     UpdateSidebarFade(split);
+    PaintAppPlates(split);
     KeepMainBackInPlace(split.viewIfLoaded.window);
 }
 
@@ -3019,6 +3127,7 @@ static void RestoreEverything(void) {
 
     RestoreClearedViews();
     RemovePieces();
+    ForgetScreenPlates();
     RemovePortalSources();
     RemoveTabBarWallpapers();
 }
@@ -3027,7 +3136,9 @@ static void ReadWallpaperOptions(void) {
     WallpaperOn = BHTWatermark.active;
     FullOn = WallpaperOn && [BHTSettings boolForKey:kFullKey];
     BarsOn = WallpaperOn && (FullOn || [BHTSettings boolForKey:kBarsKey]);
-    PortalOn = BarsOn && [BHTSettings boolForKey:kPortalKey] && PortalLayerClass() != nil;
+    // Plates are mirrored, so they need the portal layer too.
+    PlatesOn = FullOn && [BHTSettings boolForKey:kPlatesKey] && PortalLayerClass() != nil;
+    PortalOn = BarsOn && ([BHTSettings boolForKey:kPortalKey] || PlatesOn) && PortalLayerClass() != nil;
 }
 
 // Everything the options ask for, applied over what's there.
@@ -3036,6 +3147,7 @@ static void ReapplyWallpaper(void) {
     if (!WallpaperOn) {
         return;
     }
+    PaintAppPlates(AppSplit);
     for (UIViewController* controller in WeakSet(&SeenControllersStorage).allObjects) {
         ApplyWallpaperToController(controller);
         ApplyBarWallpaperForController(controller);

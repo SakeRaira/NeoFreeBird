@@ -468,6 +468,8 @@
 "BACKGROUND_WATERMARK_FULL_DETAIL" = "Makes everything painted in the theme's background color clear, showing the wallpaper at the very back. The header, the tab strips and the tab bar get the wallpaper too. When a screen opens or closes, the two screens cross-fade so they don't show through each other, and the sidebar fades in as it opens.";
 "BACKGROUND_WATERMARK_PORTAL_TITLE" = "Mirror the wallpaper (experimental)";
 "BACKGROUND_WATERMARK_PORTAL_DETAIL" = "Instead of cutting a piece of the picture for each header and tab strip, they show a live view of one wallpaper fixed to the screen, so the pieces stay lined up while screens slide or swipe. Turn this off to go back to the usual way.";
+"BACKGROUND_WATERMARK_PLATES_TITLE" = "Keep X's own transitions (experimental)";
+"BACKGROUND_WATERMARK_PLATES_DETAIL" = "With “Show on every screen” on, each screen, the sidebar and the main content get the wallpaper laid under them, so they cover each other as in the original app. Opening and closing screens, swiping back and the sidebar then move with X's own animations, without cross-fades, and the screen underneath fades toward the wallpaper where X would darken it. Uses the mirrored wallpaper even when that option is off.";
 "KEEP_TIMELINE_FILTERS_TITLE" = "Keep topic snoozes on";
 "KEEP_TIMELINE_FILTERS_DETAIL" = "Topics snoozed or filtered from the For You tab stay that way instead of switching off after 24 hours. Restart the app after changing this.";
 "HIDE_FOR_YOU_TAB_TITLE" = "Hide the For You tab";
