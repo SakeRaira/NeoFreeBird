@@ -74,6 +74,7 @@ static const void* TintAlphaKey = &TintAlphaKey;
 static const void* OverlayBackgroundKey = &OverlayBackgroundKey;
 static const void* AddedOverlaysKey = &AddedOverlaysKey;
 static const void* AddedFadesKey = &AddedFadesKey;
+static const void* TransitionWindowKey = &TransitionWindowKey;
 static const void* ScreenNormalAlphaKey = &ScreenNormalAlphaKey;
 static const void* KeepClearKey = &KeepClearKey;
 
@@ -1068,6 +1069,12 @@ static void PaintStrip(UIView* strip, BOOL inside) {
         return;
     }
     CGFloat shortHeight = window.bounds.size.height * 0.25;
+    // The row of tabs itself is a plate of the picture, like the header:
+    // content scrolling under it is hidden, whatever color X gives it.
+    if (!objc_getAssociatedObject(strip, PlateKey)) {
+        objc_setAssociatedObject(strip, PlateKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    PaintPiece(strip);
     BOOL backed = NO;
     for (UIView* view = strip; view && view.bounds.size.height <= shortHeight; view = view.superview) {
         if ([view isKindOfClass:UINavigationBar.class]) {
@@ -2152,6 +2159,88 @@ static void RemoveAddedOverlays(id animator) {
     [faded removeAllObjects];
 }
 
+// X's animator slides the screens with Core Animation: a screen's real
+// place jumps to where it ends up while it's drawn sliding there. A part of
+// the picture inside a sliding screen (a profile's tab strip) is lined up
+// for that end place, and its picture gets the exact opposite of the
+// screen's slide, with the same timing: it stays still against the
+// wallpaper the whole way, follows the finger on a swipe back, and runs
+// backwards with a cancelled one. Everything is lined up again when the
+// transition ends.
+
+// The slide moving `view`: the position animation on it or the nearest
+// view holding it, as a change relative to where it ends up.
+static CABasicAnimation* SlideAnimationFor(UIView* view, UIView* container, CGPoint* fromOffset, CGPoint* toOffset) {
+    for (UIView* mover = view; mover && mover != container.superview; mover = mover.superview) {
+        CAAnimation* animation = [mover.layer animationForKey:@"position"];
+        if ([animation isKindOfClass:CABasicAnimation.class]) {
+            CABasicAnimation* slide = (CABasicAnimation*)animation;
+            if (![slide.fromValue isKindOfClass:NSValue.class]) {
+                continue;
+            }
+            CGPoint from = [slide.fromValue CGPointValue];
+            CGPoint to = slide.toValue ? [slide.toValue CGPointValue] : mover.layer.position;
+            if (slide.additive) {
+                *fromOffset = from;
+                *toOffset = slide.toValue ? to : CGPointZero;
+            } else {
+                CGPoint end = mover.layer.position;
+                *fromOffset = CGPointMake(from.x - end.x, from.y - end.y);
+                *toOffset = CGPointMake(to.x - end.x, to.y - end.y);
+            }
+            return slide;
+        }
+        CAAnimation* transformAnimation = [mover.layer animationForKey:@"transform"];
+        if ([transformAnimation isKindOfClass:CABasicAnimation.class]) {
+            CABasicAnimation* slide = (CABasicAnimation*)transformAnimation;
+            if (![slide.fromValue isKindOfClass:NSValue.class]) {
+                continue;
+            }
+            CATransform3D from = [slide.fromValue CATransform3DValue];
+            CATransform3D to = slide.toValue ? [slide.toValue CATransform3DValue] : mover.layer.transform;
+            CATransform3D end = mover.layer.transform;
+            if (slide.additive) {
+                *fromOffset = CGPointMake(from.m41, from.m42);
+                *toOffset = CGPointMake(to.m41, to.m42);
+            } else {
+                *fromOffset = CGPointMake(from.m41 - end.m41, from.m42 - end.m42);
+                *toOffset = CGPointMake(to.m41 - end.m41, to.m42 - end.m42);
+            }
+            return slide;
+        }
+    }
+    return nil;
+}
+
+static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> transition) {
+    UIView* container = transition.containerView;
+    if (!container) {
+        return;
+    }
+    for (UIView* view in WeakSet(&PiecesStorage).allObjects) {
+        if (![view isDescendantOfView:container]) {
+            continue;
+        }
+        CALayer* picture = PieceLayer(view, NO).sublayers.firstObject;
+        if (!picture) {
+            continue;
+        }
+        CGPoint fromOffset = CGPointZero;
+        CGPoint toOffset = CGPointZero;
+        CABasicAnimation* slide = SlideAnimationFor(view, container, &fromOffset, &toOffset);
+        if (!slide || (fromOffset.x == toOffset.x && fromOffset.y == toOffset.y)) {
+            continue;
+        }
+        AlignPiece(view);
+        CABasicAnimation* counter = [slide copy];
+        counter.keyPath = @"position";
+        counter.additive = YES;
+        counter.fromValue = [NSValue valueWithCGPoint:CGPointMake(-fromOffset.x, -fromOffset.y)];
+        counter.toValue = [NSValue valueWithCGPoint:CGPointMake(-toOffset.x, -toOffset.y)];
+        [picture addAnimation:counter forKey:@"BHTHoldStill"];
+    }
+}
+
 %group TFNOverlay
 %hook TFNNavigationControllerTransitionAnimator
 
@@ -2169,6 +2258,9 @@ static void RemoveAddedOverlays(id animator) {
     }
     %orig;
     NSUInteger painted = PaintTransitionOverlay(transition, before);
+    HoldPiecesStillDuringSlide(transition);
+    objc_setAssociatedObject(self, TransitionWindowKey, [NSValue valueWithNonretainedObject:transition.containerView.window],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     long long operation = [(id)self respondsToSelector:@selector(operation)]
                               ? ((long long (*)(id, SEL))objc_msgSend)(self, @selector(operation))
                               : 0;
@@ -2183,6 +2275,13 @@ static void RemoveAddedOverlays(id animator) {
 - (void)animationEnded:(BOOL)transitionCompleted {
     %orig;
     RemoveAddedOverlays(self);
+    // Parts lined up for where the screens would end up: lined up again for
+    // where they are (a cancelled swipe puts them back).
+    UIWindow* window = [objc_getAssociatedObject(self, TransitionWindowKey) nonretainedObjectValue];
+    objc_setAssociatedObject(self, TransitionWindowKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    if (BarsOn && [window isKindOfClass:UIWindow.class]) {
+        RealignPieces(window);
+    }
 }
 
 - (double)_tfn_maximumAlphaForTransition:(id)transition {
