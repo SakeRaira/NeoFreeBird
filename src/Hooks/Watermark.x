@@ -50,6 +50,7 @@
 
 static NSString* const kBarsKey = @"background_watermark_bars";
 static NSString* const kFullKey = @"background_watermark_full";
+static NSString* const kPortalKey = @"background_watermark_portal";
 
 static const void* ListWallpaperKey = &ListWallpaperKey;
 static const void* ListOriginalBackgroundViewKey = &ListOriginalBackgroundViewKey;
@@ -77,11 +78,15 @@ static const void* AddedFadesKey = &AddedFadesKey;
 static const void* TransitionWindowKey = &TransitionWindowKey;
 static const void* ScreenNormalAlphaKey = &ScreenNormalAlphaKey;
 static const void* KeepClearKey = &KeepClearKey;
+static const void* PortalSourceKey = &PortalSourceKey;
 
 // Read on hot paths, so kept here instead of asking the settings.
 static BOOL WallpaperOn;
 static BOOL BarsOn;
 static BOOL FullOn;
+// Parts mirror one wallpaper fixed to the window instead of holding their
+// own picture (the "Mirror the wallpaper" option).
+static BOOL PortalOn;
 // Bumped on every change; marks from an older one are stale.
 static NSUInteger Generation = 1;
 
@@ -100,6 +105,7 @@ static NSHashTable* TabBarBackgroundsStorage;
 static NSHashTable* SeenTabBarControllersStorage;
 static NSHashTable* PiecesStorage;
 static NSHashTable* WallpaperViewsStorage;
+static NSHashTable* PortalSourcesStorage;
 
 static BOOL IsList(UIView* view) {
     return [view isKindOfClass:UITableView.class] || [view isKindOfClass:UICollectionView.class];
@@ -693,6 +699,98 @@ static void UpdateWallpaperView(BHTWallpaperView* wallpaper) {
     }
 }
 
+// MARK: - Mirrored parts (the "Mirror the wallpaper" option)
+
+// With the option on, a part shows a live view of one wallpaper fixed to the
+// window instead of a picture it lines up itself: Core Animation's portal
+// layer (what UIKit mirrors a view with, in a context menu's preview), set to
+// show its source where the source is on screen. The render server places
+// it, through every slide, swipe and bounce, so nothing has to be lined up or
+// held still against a moving screen. Parts laid out against a sheet or modal
+// (which carries its own wallpaper as it slides up) keep their own picture.
+// Without the portal layer the option does nothing.
+
+static Class PortalLayerClass(void) {
+    static Class portalClass;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        Class candidate = NSClassFromString(@"CAPortalLayer");
+        if (candidate && [candidate isSubclassOfClass:CALayer.class] &&
+            [candidate instancesRespondToSelector:NSSelectorFromString(@"setSourceLayer:")] &&
+            [candidate instancesRespondToSelector:NSSelectorFromString(@"sourceLayer")] &&
+            [candidate instancesRespondToSelector:NSSelectorFromString(@"setMatchesPosition:")] &&
+            [candidate instancesRespondToSelector:NSSelectorFromString(@"setMatchesTransform:")]) {
+            portalClass = candidate;
+        }
+    });
+    return portalClass;
+}
+
+static BOOL IsPortal(CALayer* layer) {
+    Class portalClass = PortalLayerClass();
+    return layer && portalClass && [layer isKindOfClass:portalClass];
+}
+
+static CALayer* NewPortalLayer(void) {
+    CALayer* portal = [[PortalLayerClass() alloc] init];
+    // Shown where the source is on screen, whatever moves the part.
+    ((void (*)(id, SEL, BOOL))objc_msgSend)(portal, NSSelectorFromString(@"setMatchesPosition:"), YES);
+    ((void (*)(id, SEL, BOOL))objc_msgSend)(portal, NSSelectorFromString(@"setMatchesTransform:"), YES);
+    portal.name = @"BHTWallpaperPortal";
+    return portal;
+}
+
+static CALayer* PortalSourceLayerOf(CALayer* portal) {
+    return ((id (*)(id, SEL))objc_msgSend)(portal, NSSelectorFromString(@"sourceLayer"));
+}
+
+static void SetPortalSourceLayer(CALayer* portal, CALayer* source) {
+    ((void (*)(id, SEL, id))objc_msgSend)(portal, NSSelectorFromString(@"setSourceLayer:"), source);
+}
+
+// The wallpaper the parts in `window` mirror: at the very back of the window,
+// filling it (behind the app, so it only shows where the app is clear, which
+// is the wallpaper there anyway).
+static BHTWallpaperView* PortalSourceFor(UIWindow* window) {
+    if (!window) {
+        return nil;
+    }
+    BHTWallpaperView* source = objc_getAssociatedObject(window, PortalSourceKey);
+    if (!source) {
+        source = [[BHTWallpaperView alloc] initWithFrame:window.bounds];
+        source.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        source.bht_reference = window;
+        objc_setAssociatedObject(window, PortalSourceKey, source, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [WeakSet(&PortalSourcesStorage) addObject:source];
+    }
+    if (source.superview != window) {
+        source.frame = window.bounds;
+        [window insertSubview:source atIndex:0];
+    }
+    UpdateWallpaperView(source);
+    return source;
+}
+
+static void RemovePortalSources(void) {
+    for (BHTWallpaperView* source in WeakSet(&PortalSourcesStorage).allObjects) {
+        UIView* window = source.bht_reference;
+        if (window && objc_getAssociatedObject(window, PortalSourceKey) == source) {
+            objc_setAssociatedObject(window, PortalSourceKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        [source removeFromSuperview];
+    }
+    [WeakSet(&PortalSourcesStorage) removeAllObjects];
+}
+
+// Whether `view`'s part mirrors the window's wallpaper.
+static BOOL PieceUsesPortal(UIView* view) {
+    if (!PortalOn) {
+        return NO;
+    }
+    UIWindow* window = view.window;
+    return window && IsAppWindow(window) && AlignmentReference(view) == window;
+}
+
 // MARK: - Picture parts (layers)
 
 static void MarkScrollAncestors(UIView* view);
@@ -750,7 +848,8 @@ static BOOL FitsInBar(UIView* view, UINavigationBar* bar) {
 }
 
 // A view's part of the picture: a clipping layer in the theme color at the
-// bottom of the view, holding the picture laid out against the view's back.
+// bottom of the view, holding the picture laid out against the view's back
+// (or, mirroring, a portal to the window's wallpaper).
 static CALayer* PieceLayer(UIView* view, BOOL create) {
     CALayer* container = objc_getAssociatedObject(view, PieceKey);
     if (container || !create) {
@@ -766,6 +865,43 @@ static CALayer* PieceLayer(UIView* view, BOOL create) {
     [container addSublayer:picture];
     objc_setAssociatedObject(view, PieceKey, container, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     return container;
+}
+
+// What a part shows, set up for its kind: the picture, or a portal to the
+// window's wallpaper. The layer is swapped when the part changes kind (the
+// option switched, a view moved into a modal). Called inside a transaction
+// without actions.
+static CALayer* PreparePieceContent(UIView* view, CALayer* container, BOOL portal) {
+    CALayer* content = container.sublayers.firstObject;
+    if (!content || IsPortal(content) != portal) {
+        [content removeFromSuperlayer];
+        if (portal) {
+            content = NewPortalLayer();
+        } else {
+            content = [CALayer layer];
+            content.contentsGravity = kCAGravityResizeAspectFill;
+        }
+        content.actions = NoLayerAnimations();
+        [container addSublayer:content];
+    }
+    if (portal) {
+        CALayer* source = PortalSourceFor(view.window).layer;
+        if (source && PortalSourceLayerOf(content) != source) {
+            SetPortalSourceLayer(content, source);
+        }
+        return content;
+    }
+    UIImage* image = BHTWatermark.image;
+    id contents = (__bridge id)image.CGImage;
+    if (content.contents != contents) {
+        content.contents = contents;
+        content.contentsScale = image.scale;
+    }
+    float opacity = BHTWatermark.opacityPercent / 100.0f;
+    if (fabsf(content.opacity - opacity) > 0.001f) {
+        content.opacity = opacity;
+    }
+    return content;
 }
 
 // Puts a piece back at the bottom and lines its picture up. Only touches what
@@ -802,12 +938,21 @@ static void AlignPiece(UIView* view) {
     }
     container.cornerRadius = layer.cornerRadius;
     container.maskedCorners = layer.maskedCorners;
-    CALayer* picture = container.sublayers.firstObject;
-    // In the container's coordinates, which start at the layer's bounds origin.
-    CGRect frame = PictureFrameFor(view, nil);
-    frame = CGRectOffset(frame, -container.frame.origin.x, -container.frame.origin.y);
-    if (!CGRectEqualToRect(picture.frame, frame)) {
-        picture.frame = frame;
+    BOOL portal = PieceUsesPortal(view);
+    CALayer* content = container.sublayers.firstObject;
+    if (!content || IsPortal(content) != portal) {
+        content = PreparePieceContent(view, container, portal);
+    }
+    // A portal just covers the part; it finds the wallpaper by itself.
+    CGRect frame = container.bounds;
+    if (!portal) {
+        // In the container's coordinates, which start at the layer's bounds
+        // origin.
+        frame = PictureFrameFor(view, nil);
+        frame = CGRectOffset(frame, -container.frame.origin.x, -container.frame.origin.y);
+    }
+    if (!CGRectEqualToRect(content.frame, frame)) {
+        content.frame = frame;
     }
     [CATransaction commit];
 }
@@ -818,7 +963,6 @@ static void PaintPiece(UIView* view) {
         return;
     }
     CALayer* container = PieceLayer(view, YES);
-    CALayer* picture = container.sublayers.firstObject;
 
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
@@ -829,15 +973,7 @@ static void PaintPiece(UIView* view) {
     if (!CGColorEqualToColor(container.backgroundColor, theme)) {
         container.backgroundColor = theme;
     }
-    id contents = (__bridge id)image.CGImage;
-    if (picture.contents != contents) {
-        picture.contents = contents;
-        picture.contentsScale = image.scale;
-    }
-    float opacity = BHTWatermark.opacityPercent / 100.0f;
-    if (fabsf(picture.opacity - opacity) > 0.001f) {
-        picture.opacity = opacity;
-    }
+    PreparePieceContent(view, container, PieceUsesPortal(view));
     [CATransaction commit];
 
     [WeakSet(&PiecesStorage) addObject:view];
@@ -2264,7 +2400,8 @@ static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> 
             continue;
         }
         CALayer* picture = PieceLayer(view, NO).sublayers.firstObject;
-        if (!picture) {
+        // A mirrored part already stays with the wallpaper.
+        if (!picture || IsPortal(picture)) {
             continue;
         }
         CGPoint fromOffset = CGPointZero;
@@ -2882,6 +3019,7 @@ static void RestoreEverything(void) {
 
     RestoreClearedViews();
     RemovePieces();
+    RemovePortalSources();
     RemoveTabBarWallpapers();
 }
 
@@ -2889,6 +3027,7 @@ static void ReadWallpaperOptions(void) {
     WallpaperOn = BHTWatermark.active;
     FullOn = WallpaperOn && [BHTSettings boolForKey:kFullKey];
     BarsOn = WallpaperOn && (FullOn || [BHTSettings boolForKey:kBarsKey]);
+    PortalOn = BarsOn && [BHTSettings boolForKey:kPortalKey] && PortalLayerClass() != nil;
 }
 
 // Everything the options ask for, applied over what's there.

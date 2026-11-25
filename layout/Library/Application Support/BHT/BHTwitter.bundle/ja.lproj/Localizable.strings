@@ -466,6 +466,8 @@
 "BACKGROUND_WATERMARK_BARS_DETAIL" = "画面上部のヘッダ（タブの切り替えを含む）と下部のタブバーの背景にも壁紙を表示し、画面全体で1枚の画像としてつながるようにします。";
 "BACKGROUND_WATERMARK_FULL_TITLE" = "すべての画面に表示";
 "BACKGROUND_WATERMARK_FULL_DETAIL" = "テーマの背景色で塗られた部分をすべて透明にして、いちばん後ろの壁紙を見せます。ヘッダ、タブの切り替え、タブバーにも壁紙を表示します。画面を開いたり閉じたりするときは、前後の画面が重なって見えないようにクロスフェードします。サイドバーは開くにつれてフェードインします。";
+"BACKGROUND_WATERMARK_PORTAL_TITLE" = "壁紙をミラー表示（試験的）";
+"BACKGROUND_WATERMARK_PORTAL_DETAIL" = "ヘッダやタブの切り替えごとに画像を切り抜いて描く代わりに、画面に固定した1枚の壁紙をそのまま映します。画面のスライドやスワイプの途中でも位置がずれにくくなります。オフにすると従来の方式に戻ります。";
 "KEEP_TIMELINE_FILTERS_TITLE" = "スヌーズを自動で解除しない";
 "KEEP_TIMELINE_FILTERS_DETAIL" = "おすすめタブでスヌーズ（絞り込み）したトピックが、24時間後に自動で解除されないようにします。変更後はアプリを再起動してください。";
 "HIDE_FOR_YOU_TAB_TITLE" = "おすすめタブを非表示";

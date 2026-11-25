@@ -115,6 +115,9 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                       @"default": @NO},
                     @{@"key": @"background_watermark_full",
                       @"parentKey": @"background_watermark",
+                      @"default": @NO},
+                    @{@"key": @"background_watermark_portal",
+                      @"parentKey": @"background_watermark",
                       @"default": @NO}
                 ]
             },
