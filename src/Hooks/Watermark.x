@@ -375,10 +375,8 @@ static NSHashTable* ThemedViewsStorage;
 static BOOL ThemedViewsPending;
 static NSHashTable* OffscreenThemedViewsStorage;
 static BOOL OffscreenThemedViewsPending;
-static BOOL BlurTintsExist;
 
 static void ApplyToThemedView(UIView* view);
-static void ApplyTintPiece(UIView* tint);
 static void ProcessThemedViews(BOOL beforeDrawing);
 
 // The tint X lays over one of its blurs (the profile header's, collapsed):
@@ -397,22 +395,24 @@ static BOOL IsBlurTint(UIView* view) {
     return NO;
 }
 
-// The tint shows the wallpaper at its strength instead of the theme color;
-// the blur itself is left alone.
-static void ShowWallpaperAsTint(UIView* tint, UIColor* color, CGFloat alpha) {
-    objc_setAssociatedObject(tint, PlateKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+// The tint is the theme color 60% see-through (never stronger than X's
+// own), over the blurred banner; the blur itself is left alone. X's blur
+// draws what's inside it on its own, where a part of the picture never
+// showed. X's color is put back when the wallpaper is off.
+static const CGFloat kBlurTintAlpha = 0.4;
+
+static UIColor* TranslucentBlurTint(UIView* tint, UIColor* color, CGFloat alpha) {
     objc_setAssociatedObject(tint, TintAlphaKey, @(alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(tint, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(tint, LayerBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     [WeakSet(&ClearedViewsStorage) addObject:tint];
-    BlurTintsExist = YES;
-    ApplyTintPiece(tint);
+    return [color colorWithAlphaComponent:MIN(alpha, kBlurTintAlpha)];
 }
 
 // Every time X (or anything) gives a view a background color:
 // - a view made clear stays clear, in the same call, so it never flashes
 //   back (X calls the setter again whenever the look changes);
-// - a blur's tint in the theme color shows the wallpaper instead;
+// - a blur's tint in the theme color becomes 60% see-through;
 // - a pressed or selected highlight becomes a translucent theme tint;
 // - any other view given the theme's background color is noted, and gets
 //   made clear or its part of the picture before the frame is drawn.
@@ -424,8 +424,7 @@ static void ShowWallpaperAsTint(UIView* tint, UIColor* color, CGFloat alpha) {
         CGFloat distance = ThemeDistance(color, self, &alpha);
         BOOL themeColored = distance < 0.03;
         if (themeColored && IsBlurTint(self)) {
-            ShowWallpaperAsTint(self, color, alpha);
-            %orig(UIColor.clearColor);
+            %orig(TranslucentBlurTint(self, color, alpha));
             return;
         }
         if (themeColored && alpha >= 0.5) {
@@ -457,9 +456,6 @@ static void ShowWallpaperAsTint(UIView* tint, UIColor* color, CGFloat alpha) {
             ApplyToThemedView(view);
         }
     }
-    if (BlurTintsExist && WallpaperOn && objc_getAssociatedObject(view, TintAlphaKey)) {
-        ApplyTintPiece(view);
-    }
 }
 
 %end
@@ -472,7 +468,8 @@ static void RestoreClearedViews(void) {
         // color it recorded.
         CGColorRef current = view.layer.backgroundColor;
         BOOL drawnClear = !current || CGColorGetAlpha(current) < 0.01;
-        if (original && drawnClear) {
+        BOOL blurTint = objc_getAssociatedObject(view, TintAlphaKey) != nil;
+        if (original && (drawnClear || blurTint)) {
             if (objc_getAssociatedObject(view, LayerBackgroundKey)) {
                 view.layer.backgroundColor = [original resolvedColorWithTraitCollection:view.traitCollection].CGColor;
             } else {
@@ -481,6 +478,7 @@ static void RestoreClearedViews(void) {
         }
         objc_setAssociatedObject(view, OriginalBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(view, LayerBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(view, TintAlphaKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     [WeakSet(&ClearedViewsStorage) removeAllObjects];
 }
@@ -756,12 +754,9 @@ static void RemovePortalSources(void) {
     [WeakSet(&PortalSourcesStorage) removeAllObjects];
 }
 
-// Whether `view`'s part mirrors the window's wallpaper. A blur's tint (the
-// collapsed profile header) doesn't: X's blur draws what's inside it on its
-// own, where a portal shows nothing and the part's theme color showed. It
-// keeps its own picture, held still through slides like any other.
+// Whether `view`'s part mirrors the window's wallpaper.
 static BOOL PieceUsesPortal(UIView* view) {
-    if (!PortalOn || objc_getAssociatedObject(view, TintAlphaKey)) {
+    if (!PortalOn) {
         return NO;
     }
     UIWindow* window = view.window;
@@ -985,22 +980,6 @@ static void PaintPiece(UIView* view) {
     [WeakSet(&PiecesStorage) addObject:view];
     MarkScrollAncestors(view);
     AlignPiece(view);
-}
-
-// A blur tint's part: the wallpaper at the tint's strength.
-static void ApplyTintPiece(UIView* tint) {
-    NSNumber* alpha = objc_getAssociatedObject(tint, TintAlphaKey);
-    if (!alpha || !tint.window) {
-        return;
-    }
-    PaintPiece(tint);
-    CALayer* container = PieceLayer(tint, NO);
-    if (container && fabsf(container.opacity - alpha.floatValue) > 0.001f) {
-        [CATransaction begin];
-        [CATransaction setDisableActions:YES];
-        container.opacity = alpha.floatValue;
-        [CATransaction commit];
-    }
 }
 
 // Lines every part in a window up again; parts only move with layout (a
