@@ -403,7 +403,7 @@ static BOOL IsBlurTint(UIView* view) {
     UIView* parent = view.superview;
     for (int i = 0; i < 3 && parent; i++, parent = parent.superview) {
         if (IsCustomBlur(parent)) {
-            id tint = nfb_objectIvar(parent, "tintView");
+            id tint = objectIvar(parent, "tintView");
             if ([tint isKindOfClass:UIView.class]) {
                 return tint == view;
             }
@@ -974,7 +974,7 @@ static void PrepareCellSurface(UIView* cell) {
     ClearThemeBackground(cell);
     ClearThemeBackground([cell respondsToSelector:@selector(contentView)] ? [(id)cell contentView] : nil);
     ClearThemeBackground([cell respondsToSelector:@selector(backgroundView)] ? [(id)cell backgroundView] : nil);
-    ClearThemeBackground(nfb_objectIvar(cell, "_backgroundView"));
+    ClearThemeBackground(objectIvar(cell, "_backgroundView"));
 }
 
 static void PrepareCellContents(UIView* cell) {
@@ -1984,7 +1984,7 @@ static void PrepareTransitionOverlay(id animator) {
     id saved = objc_getAssociatedObject(animator, OverlayOriginalColorKey);
     if (FullOn) {
         if (!saved) {
-            id original = nfb_objectIvar(animator, "_backgroundViewOverlayColor");
+            id original = objectIvar(animator, "_backgroundViewOverlayColor");
             objc_setAssociatedObject(animator, OverlayOriginalColorKey,
                                      [original isKindOfClass:UIColor.class] ? original : NSNull.null,
                                      OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -2098,14 +2098,14 @@ static void FadeOutHeaderForPush(id animator, id<UIViewControllerContextTransiti
     UIViewController* from = [transition viewControllerForKey:UITransitionContextFromViewControllerKey];
     UINavigationController* navigationController = from.navigationController;
     if (![navigationController isKindOfClass:UINavigationController.class]) {
-        navigationController = nfb_objectIvar(animator, "_navigationController");
+        navigationController = objectIvar(animator, "_navigationController");
     }
     NSMutableArray<UIView*>* views = [NSMutableArray array];
     UIView* accessory = from ? HeaderAccessoryOf(from) : nil;
     if (accessory) {
         [views addObject:accessory];
     }
-    UIView* snapshot = nfb_objectIvar(navigationController, "_glassBarTransitionSnapshot");
+    UIView* snapshot = objectIvar(navigationController, "_glassBarTransitionSnapshot");
     if ([snapshot isKindOfClass:UIView.class] && snapshot != accessory) {
         [views addObject:snapshot];
     }
@@ -2435,7 +2435,7 @@ static CGFloat SidebarOpenFraction(UIViewController* split, UIView* sidebar) {
             fraction = MAX(0.0, MIN(1.0, percent));
         }
     }
-    UIView* content = nfb_objectIvar(split, "_contentHostView");
+    UIView* content = objectIvar(split, "_contentHostView");
     UIView* splitView = split.viewIfLoaded;
     CGFloat width = sidebar.bounds.size.width;
     if ([content isKindOfClass:UIView.class] && splitView && content.window == splitView.window && width > 1) {
@@ -2448,7 +2448,7 @@ static CGFloat SidebarOpenFraction(UIViewController* split, UIView* sidebar) {
 // On a phone the content covers the waiting sidebar; a sidebar always beside
 // the content (a wide screen) is left alone.
 static BOOL SidebarWaitsBehindContent(UIViewController* split, UIView* sidebar) {
-    UIView* content = nfb_objectIvar(split, "_contentHostView");
+    UIView* content = objectIvar(split, "_contentHostView");
     if (![content isKindOfClass:UIView.class] || content.window != sidebar.window) {
         return YES;
     }
@@ -2538,7 +2538,7 @@ static void ClearSidebarOverlays(UIViewController* split) {
         [parents addObject:split.viewIfLoaded];
     }
     for (NSString* name in @[@"_contentHostView", @"_dashHostView"]) {
-        UIView* host = nfb_objectIvar(split, name.UTF8String);
+        UIView* host = objectIvar(split, name.UTF8String);
         if (![host isKindOfClass:UIView.class]) {
             continue;
         }

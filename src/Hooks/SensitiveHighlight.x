@@ -130,13 +130,13 @@ static BHTSensitiveFlags FlagsForMediaWarning(id warning) {
     }
 
     BHTSensitiveFlags flags = BHTSensitiveFlagged;
-    if (nfb_boolIvar(warning, "adultContent", NO)) {
+    if (boolIvar(warning, "adultContent", NO)) {
         flags |= BHTSensitiveAdultContent;
     }
-    if (nfb_boolIvar(warning, "graphicViolence", NO)) {
+    if (boolIvar(warning, "graphicViolence", NO)) {
         flags |= BHTSensitiveGraphicViolence;
     }
-    if (nfb_boolIvar(warning, "other", NO)) {
+    if (boolIvar(warning, "other", NO)) {
         flags |= BHTSensitiveOther;
     }
     return flags;

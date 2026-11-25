@@ -151,6 +151,10 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                       @"default": @NO},
                     @{@"key": @"hide_quote_tweets",
                       @"default": @NO},
+                    @{@"key": @"hide_ai_tweets",
+                      @"default": @NO},
+                    @{@"key": @"hide_paid_tweets",
+                      @"default": @NO},
                     @{@"key": @"hide_verified_tweets",
                       @"default": @NO},
                     // Words that hide posts (BHTNGWords).
