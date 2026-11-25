@@ -20,9 +20,10 @@
 // alone.
 //
 // The handler's class is Kotlin's and usually not one the app ships: Kotlin
-// makes an Objective-C class for it at runtime ("kobjcc<n>") the first time
-// it hands the object over, right before the screen uses it. So the handler
-// is caught three ways:
+// makes an Objective-C class for it at runtime the first time it hands the
+// object over, right before the screen uses it. Current runtimes name it
+// "<prefix>_kobjcc<n>" with a prefix of the framework's (older ones plain
+// "kobjcc<n>"). So the handler is caught three ways:
 //  - the chat object graph's -lastSeenSendHandler getter is wrapped, and
 //    hooks the class of whatever handler it returns before returning it;
 //  - classes Kotlin has already made are looked up by name, cheaply, one by
@@ -37,10 +38,25 @@ static const char* const kGraphProtocolName = "Subsystem_ios_iosArm64_mainBaseDm
 
 static NSString* const kReadReceiptsStatusKey = @"no_dm_read_receipts_status";
 
+// How Kotlin may name the classes it makes at runtime, each followed by a
+// number from 0 with no gaps. X 12.45 has the framework's own names in it
+// ("Subsystem_ios_iosArm64_main", "XKotlin"); the plain one is older
+// runtimes'.
+static const char* const kRuntimeClassPrefixes[] = {
+    "Subsystem_ios_iosArm64_main_kobjcc",
+    "XKotlin_kobjcc",
+    "kobjcc",
+};
+static const size_t kRuntimeClassPrefixCount = sizeof(kRuntimeClassPrefixes) / sizeof(kRuntimeClassPrefixes[0]);
+// Per prefix: how many classes were found so far (the next number to look
+// up again, since later ones may not exist yet).
+static unsigned int RuntimeClassesFound[sizeof(kRuntimeClassPrefixes) / sizeof(kRuntimeClassPrefixes[0])];
+
 static NSMutableSet<NSString*>* HookedHandlerClasses;
 static NSMutableSet<NSString*>* HookedGraphClasses;
 static NSObject* ReadReceiptsLock;
 static volatile long BlockedReadReceipts;
+static BOOL HandlerProtocolFound;
 
 static BOOL ReadReceiptsBlocked(void) {
     return [BHTSettings boolForKey:@"no_dm_read_receipts"];
@@ -86,9 +102,15 @@ NSString* BHTReadReceiptsStatusDetail(void) {
         handlers = HookedHandlerClasses.allObjects ?: @[];
         graphs = HookedGraphClasses.allObjects ?: @[];
     }
-    return [NSString stringWithFormat:@"handler: %@\ngraph: %@\nblocked: %ld",
+    NSMutableArray<NSString*>* runtime = [NSMutableArray array];
+    for (size_t p = 0; p < kRuntimeClassPrefixCount; p++) {
+        [runtime addObject:[NSString stringWithFormat:@"%s: %u", kRuntimeClassPrefixes[p], RuntimeClassesFound[p]]];
+    }
+    return [NSString stringWithFormat:@"protocol: %@\nhandler: %@\ngraph: %@\nruntime classes: %@\nblocked: %ld",
+                                      HandlerProtocolFound ? @"found" : @"missing",
                                       handlers.count ? [handlers componentsJoinedByString:@", "] : @"-",
                                       graphs.count ? [graphs componentsJoinedByString:@", "] : @"-",
+                                      [runtime componentsJoinedByString:@", "],
                                       __atomic_load_n(&BlockedReadReceipts, __ATOMIC_RELAXED)];
 }
 
@@ -235,20 +257,23 @@ static void ScanImagesForReadReceiptClasses(Protocol* handlerProtocol, Protocol*
     }
 }
 
-// Classes Kotlin has made at runtime so far, numbered from 0 with no gaps.
-// Each lookup is one hash probe; classes already hooked are skipped.
+// Classes Kotlin has made at runtime since the last pass, under each name it
+// may use. Each lookup is one hash probe; classes already hooked are skipped.
 static void ScanKotlinRuntimeClasses(Protocol* handlerProtocol, Protocol* graphProtocol) {
-    unsigned int misses = 0;
-    for (unsigned int n = 0; n < 100000 && misses < 64; n++) {
-        char name[32];
-        snprintf(name, sizeof(name), "kobjcc%u", n);
-        Class cls = objc_lookUpClass(name);
-        if (!cls) {
-            misses++;
-            continue;
+    for (size_t p = 0; p < kRuntimeClassPrefixCount; p++) {
+        unsigned int misses = 0;
+        for (unsigned int n = RuntimeClassesFound[p]; n < 1000000 && misses < 64; n++) {
+            char name[96];
+            snprintf(name, sizeof(name), "%s%u", kRuntimeClassPrefixes[p], n);
+            Class cls = objc_lookUpClass(name);
+            if (!cls) {
+                misses++;
+                continue;
+            }
+            misses = 0;
+            RuntimeClassesFound[p] = n + 1;
+            ConsiderReadReceiptClass(cls, handlerProtocol, graphProtocol);
         }
-        misses = 0;
-        ConsiderReadReceiptClass(cls, handlerProtocol, graphProtocol);
     }
 }
 
@@ -259,6 +284,7 @@ static void HookLastSeenSendHandlers(void) {
     if (!handlerProtocol) {
         return;
     }
+    HandlerProtocolFound = YES;
     if (!ReadReceiptsLock) {
         ReadReceiptsLock = [NSObject new];
         HookedHandlerClasses = [NSMutableSet set];
@@ -275,6 +301,32 @@ static void HookLastSeenSendHandlers(void) {
 - (void)viewWillAppear:(BOOL)animated {
     HookLastSeenSendHandlers();
     %orig;
+}
+
+%end
+
+// A conversation can also be opened without Chats (a notification, a
+// profile's message button): chat screens look again as they come and once
+// they're shown, which picks up a handler Kotlin made for them meanwhile.
+static BOOL IsChatScreen(UIViewController* controller) {
+    NSString* name = NSStringFromClass(controller.class);
+    return [name containsString:@"Chat"] || [name containsString:@"Conversation"] || [name containsString:@"DM"];
+}
+
+%hook UIViewController
+
+- (void)viewWillAppear:(BOOL)animated {
+    if (ReadReceiptsBlocked() && IsChatScreen(self)) {
+        HookLastSeenSendHandlers();
+    }
+    %orig;
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (ReadReceiptsBlocked() && IsChatScreen(self)) {
+        HookLastSeenSendHandlers();
+    }
 }
 
 %end
