@@ -2,70 +2,41 @@
 //  Watermark.x
 //  NeoFreeBird
 //
-//  Wallpaper: the chosen picture (BHTWatermark).
+//  Wallpaper: the chosen picture (BHTWatermark) behind every screen.
 //
-//  Timelines (the base option): each timeline list in a tab gets the picture
-//  as its backgroundView (drawn behind the cells, fixed while scrolling), and
-//  its cells are made clear. X's cells paint their own background through a
-//  private view of TFNTableViewCell; its hostProvidesBackground switch, made
-//  for lists that draw the background themselves, turns that off.
-//
-//  "Every screen": one picture at the back, and everything above it painted
-//  in the theme's background color made clear, so the picture shows through
-//  and nothing has to follow anything: scrolling, paging between tabs and
-//  screens moving all happen over a picture that doesn't move.
-//   - The backs: each sheet or modal (it carries its own as it slides up),
-//     otherwise the view under the root, behind the sidebar, the main
-//     content and the tab bar.
-//   - The sidebar waits behind the main content; with the content clear it
-//     would show through, so it's faded out and fades in with how far it's
-//     open (and back out as it closes).
-//   - Only what content passes under can't be clear: the header, the tab
-//     strips (Following, All/Mentions, Top/Latest...) and the tab bar. They
-//     get their own part of the picture instead, laid out against the same
-//     back so it lines up. They hardly move; one inside a scrolling list (a
-//     profile's sticky strip) is lined up as the list scrolls.
-//   - Opening or closing a screen slides the new one over the old; with both
-//     clear they'd show at once. In X's own navigation the overlay its
-//     animator dims the screen underneath with becomes the wallpaper, so that
-//     screen is covered as the new one slides in and uncovered as a swipe
-//     back goes on, without touching the screens. Elsewhere the screens
-//     cross-fade alongside UIKit's slide, without its dark veil.
+//  One picture at the back of the window, and everything above it painted in
+//  the theme's background color made clear, so the picture shows through:
+//  scrolling, paging between tabs and screens moving all happen over a
+//  picture that doesn't move.
+//   - Plates: each screen (one of a navigation controller's), the main
+//     content and the sidebar get a part of the picture at their bottom, so
+//     they still cover each other as in the app. Opening and closing
+//     screens, swiping back and the sidebar run on X's own animations,
+//     untouched; X's dimming overlay shows the wallpaper instead of black.
+//   - What content passes under gets a part of the picture too: the header,
+//     the tab strips (Following, All/Mentions, Top/Latest...) and the tab
+//     bar.
+//   - Parts are mirrored: a portal to one wallpaper fixed at the back of the
+//     window, which the render server keeps in place through every slide,
+//     swipe and bounce. A sheet or modal carries its own picture as it
+//     slides up, laid out against it.
 //   - X paints its theme colors through setters it calls again whenever the
 //     look changes. A view made clear stays clear in that same call; any
 //     other view given the theme's background color is handled right before
 //     the frame is drawn, and X reloading its colors gets a full pass then
 //     too, so nothing shows in the theme color first.
 //
-//  "Header and tab bar": just those parts, over the normal app.
-//
-//  "Mirror the wallpaper": the parts show a portal to one wallpaper fixed at
-//  the back of the window instead of a picture of their own (see "Mirrored
-//  parts").
-//
-//  "Keep X's own transitions" (with every screen): each screen, the sidebar
-//  and the main content also get a mirrored plate of the wallpaper at their
-//  bottom, so they cover each other as in the app and X's own animations
-//  run untouched: no cross-fades and no sidebar fade, and X's dimming
-//  overlay shows the wallpaper instead of black (see "Plates under
-//  screens").
-//
 //  Theme colors are cleared on views' backgrounds only (X also uses the color
 //  for text and outlines). Every change is remembered and undone when
-//  switched off. UIKit's views are never reordered; parts are layers.
+//  switched off. UIKit's views are never reordered; parts are layers, and
+//  the only views added are the wallpaper at the back of the window and the
+//  tab bar's.
 //
 
 #import <QuartzCore/QuartzCore.h>
 #import "HookHelpers.h"
 #import "Core/BHTWatermark.h"
 
-static NSString* const kBarsKey = @"background_watermark_bars";
-static NSString* const kFullKey = @"background_watermark_full";
-static NSString* const kPortalKey = @"background_watermark_portal";
-static NSString* const kPlatesKey = @"background_watermark_plates";
-
-static const void* ListWallpaperKey = &ListWallpaperKey;
-static const void* ListOriginalBackgroundViewKey = &ListOriginalBackgroundViewKey;
 static const void* OriginalBackgroundKey = &OriginalBackgroundKey;
 static const void* LayerBackgroundKey = &LayerBackgroundKey;
 static const void* PieceKey = &PieceKey;
@@ -78,31 +49,21 @@ static const void* BarPassKey = &BarPassKey;
 static const void* TabBarWallpaperKey = &TabBarWallpaperKey;
 static const void* ScrollHoldsPieceKey = &ScrollHoldsPieceKey;
 static const void* StripPassKey = &StripPassKey;
-static const void* FadeAlphaKey = &FadeAlphaKey;
-static const void* FadeTransitionKey = &FadeTransitionKey;
-static const void* FadeNavigationKey = &FadeNavigationKey;
 static const void* PlateKey = &PlateKey;
 static const void* OverlayOriginalColorKey = &OverlayOriginalColorKey;
 static const void* TintAlphaKey = &TintAlphaKey;
 static const void* OverlayBackgroundKey = &OverlayBackgroundKey;
-static const void* AddedOverlaysKey = &AddedOverlaysKey;
-static const void* AddedFadesKey = &AddedFadesKey;
 static const void* TransitionWindowKey = &TransitionWindowKey;
-static const void* ScreenNormalAlphaKey = &ScreenNormalAlphaKey;
 static const void* KeepClearKey = &KeepClearKey;
 static const void* PortalSourceKey = &PortalSourceKey;
 static const void* ScreenPlateKey = &ScreenPlateKey;
+static const void* BarBackedKey = &BarBackedKey;
 
 // Read on hot paths, so kept here instead of asking the settings.
 static BOOL WallpaperOn;
-static BOOL BarsOn;
-static BOOL FullOn;
-// Parts mirror one wallpaper fixed to the window instead of holding their
-// own picture (the "Mirror the wallpaper" option).
+// Parts are mirrored (see "Mirrored parts"); without the portal layer they
+// hold pictures of their own.
 static BOOL PortalOn;
-// Screens get plates and keep X's own transitions (the "Keep X's own
-// transitions" option, with every screen).
-static BOOL PlatesOn;
 // Bumped on every change; marks from an older one are stale.
 static NSUInteger Generation = 1;
 
@@ -114,7 +75,6 @@ static NSHashTable* WeakSet(NSHashTable* __strong* storage) {
 }
 
 static NSHashTable* SeenControllersStorage;
-static NSHashTable* WallpaperedListsStorage;
 static NSHashTable* HostChangedCellsStorage;
 static NSHashTable* ClearedViewsStorage;
 static NSHashTable* TabBarBackgroundsStorage;
@@ -347,7 +307,7 @@ static CGColorRef SidebarHighlightReplacement(CALayer* layer, CGColorRef color) 
 %hook CALayer
 
 - (void)setBackgroundColor:(CGColorRef)color {
-    if (FullOn && color) {
+    if (WallpaperOn && color) {
         CGColorRef replacement = SidebarHighlightReplacement(self, color);
         if (replacement) {
             %orig(replacement);
@@ -453,35 +413,32 @@ static void ShowWallpaperAsTint(UIView* tint, UIColor* color, CGFloat alpha) {
 // - a view made clear stays clear, in the same call, so it never flashes
 //   back (X calls the setter again whenever the look changes);
 // - a blur's tint in the theme color shows the wallpaper instead;
-// - a pressed or selected highlight becomes a dark tint;
+// - a pressed or selected highlight becomes a translucent theme tint;
 // - any other view given the theme's background color is noted, and gets
 //   made clear or its part of the picture before the frame is drawn.
 %hook UIView
 
 - (void)setBackgroundColor:(UIColor*)color {
     if (WallpaperOn && color) {
-        BOOL keepsClear = KeepsClear(self);
-        if (keepsClear || BarsOn) {
-            CGFloat alpha = 0;
-            CGFloat distance = ThemeDistance(color, self, &alpha);
-            BOOL themeColored = distance < 0.03;
-            if (FullOn && themeColored && IsBlurTint(self)) {
-                ShowWallpaperAsTint(self, color, alpha);
+        CGFloat alpha = 0;
+        CGFloat distance = ThemeDistance(color, self, &alpha);
+        BOOL themeColored = distance < 0.03;
+        if (themeColored && IsBlurTint(self)) {
+            ShowWallpaperAsTint(self, color, alpha);
+            %orig(UIColor.clearColor);
+            return;
+        }
+        if (themeColored && alpha >= 0.5) {
+            if (KeepsClear(self)) {
+                objc_setAssociatedObject(self, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 %orig(UIColor.clearColor);
                 return;
             }
-            if (themeColored && alpha >= 0.5) {
-                if (keepsClear) {
-                    objc_setAssociatedObject(self, OriginalBackgroundKey, color, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    %orig(UIColor.clearColor);
-                    return;
-                }
-                [WeakSet(&ThemedViewsStorage) addObject:self];
-                ThemedViewsPending = YES;
-            } else if (FullOn && !themeColored && IsHighlightColor(color, self, distance, alpha)) {
-                %orig(HighlightTint());
-                return;
-            }
+            [WeakSet(&ThemedViewsStorage) addObject:self];
+            ThemedViewsPending = YES;
+        } else if (!themeColored && IsHighlightColor(color, self, distance, alpha)) {
+            %orig(HighlightTint());
+            return;
         }
     }
     %orig;
@@ -500,7 +457,7 @@ static void ShowWallpaperAsTint(UIView* tint, UIColor* color, CGFloat alpha) {
             ApplyToThemedView(view);
         }
     }
-    if (BlurTintsExist && FullOn && objc_getAssociatedObject(view, TintAlphaKey)) {
+    if (BlurTintsExist && WallpaperOn && objc_getAssociatedObject(view, TintAlphaKey)) {
         ApplyTintPiece(view);
     }
 }
@@ -645,7 +602,7 @@ static CGRect PictureFrameFor(UIView* view, UIView* reference) {
     return [view convertRect:picture fromView:reference];
 }
 
-// MARK: - Wallpaper views (timeline lists, the tab bar)
+// MARK: - Wallpaper views (the window's back, the tab bar)
 
 @interface BHTWallpaperView : UIView
 @property (nonatomic, strong) UIImageView* imageView;
@@ -716,16 +673,16 @@ static void UpdateWallpaperView(BHTWallpaperView* wallpaper) {
     }
 }
 
-// MARK: - Mirrored parts (the "Mirror the wallpaper" option)
+// MARK: - Mirrored parts
 
-// With the option on, a part shows a live view of one wallpaper fixed to the
-// window instead of a picture it lines up itself: Core Animation's portal
+// A part shows a live view of one wallpaper fixed to the window instead of a
+// picture it lines up itself: Core Animation's portal
 // layer (what UIKit mirrors a view with, in a context menu's preview), set to
 // show its source where the source is on screen. The render server places
 // it, through every slide, swipe and bounce, so nothing has to be lined up or
 // held still against a moving screen. Parts laid out against a sheet or modal
 // (which carries its own wallpaper as it slides up) keep their own picture.
-// Without the portal layer the option does nothing.
+// Without the portal layer, parts hold pictures of their own.
 
 static Class PortalLayerClass(void) {
     static Class portalClass;
@@ -866,7 +823,7 @@ static BOOL FitsInBar(UIView* view, UINavigationBar* bar) {
 
 // A view's part of the picture: a clipping layer in the theme color at the
 // bottom of the view, holding the picture laid out against the view's back
-// (or, mirroring, a portal to the window's wallpaper).
+// (and, mirrored, a portal to the window's wallpaper over it).
 static CALayer* PieceLayer(UIView* view, BOOL create) {
     CALayer* container = objc_getAssociatedObject(view, PieceKey);
     if (container || !create) {
@@ -884,41 +841,65 @@ static CALayer* PieceLayer(UIView* view, BOOL create) {
     return container;
 }
 
-// What a part shows, set up for its kind: the picture, or a portal to the
-// window's wallpaper. The layer is swapped when the part changes kind (the
-// option switched, a view moved into a modal). Called inside a transaction
-// without actions.
-static CALayer* PreparePieceContent(UIView* view, CALayer* container, BOOL portal) {
-    CALayer* content = container.sublayers.firstObject;
-    if (!content || IsPortal(content) != portal) {
-        [content removeFromSuperlayer];
-        if (portal) {
-            content = NewPortalLayer();
-        } else {
-            content = [CALayer layer];
-            content.contentsGravity = kCAGravityResizeAspectFill;
-        }
-        content.actions = NoLayerAnimations();
-        [container addSublayer:content];
+// A part's portal, when it's mirrored: above its picture.
+static CALayer* PortalOfPiece(CALayer* container) {
+    CALayer* top = container.sublayers.lastObject;
+    return IsPortal(top) ? top : nil;
+}
+
+// A short part (in the header, a tab strip) keeps its picture under the
+// portal: while the header changes over (a swipe back), X shows copies of
+// its items and a snapshot of it, and a portal inside those shows nothing,
+// which left the theme color there; the picture shows instead. Tall parts
+// (the plates under screens) aren't copied, so theirs is hidden.
+static BOOL PieceKeepsPicture(UIView* view) {
+    return view.bounds.size.height <= view.window.bounds.size.height * 0.25;
+}
+
+// What a part shows, set up for its kind: the picture, and when mirrored a
+// portal to the window's wallpaper over it. The portal is added or taken off
+// when the part changes kind (a view moved into a modal). Called inside a
+// transaction without actions.
+static void PreparePieceContent(UIView* view, CALayer* container, BOOL portal) {
+    CALayer* picture = container.sublayers.firstObject;
+    if (!picture || IsPortal(picture)) {
+        picture = [CALayer layer];
+        picture.contentsGravity = kCAGravityResizeAspectFill;
+        picture.actions = NoLayerAnimations();
+        [container insertSublayer:picture atIndex:0];
     }
-    if (portal) {
+    CALayer* mirror = PortalOfPiece(container);
+    if (portal && !mirror) {
+        mirror = NewPortalLayer();
+        mirror.actions = NoLayerAnimations();
+        [container addSublayer:mirror];
+    } else if (!portal && mirror) {
+        [mirror removeFromSuperlayer];
+        mirror = nil;
+    }
+    if (mirror) {
         CALayer* source = PortalSourceFor(view.window).layer;
-        if (source && PortalSourceLayerOf(content) != source) {
-            SetPortalSourceLayer(content, source);
+        if (source && PortalSourceLayerOf(mirror) != source) {
+            SetPortalSourceLayer(mirror, source);
         }
-        return content;
+    }
+    BOOL showsPicture = !mirror || PieceKeepsPicture(view);
+    if (picture.hidden == showsPicture) {
+        picture.hidden = !showsPicture;
+    }
+    if (!showsPicture) {
+        return;
     }
     UIImage* image = BHTWatermark.image;
     id contents = (__bridge id)image.CGImage;
-    if (content.contents != contents) {
-        content.contents = contents;
-        content.contentsScale = image.scale;
+    if (picture.contents != contents) {
+        picture.contents = contents;
+        picture.contentsScale = image.scale;
     }
     float opacity = BHTWatermark.opacityPercent / 100.0f;
-    if (fabsf(content.opacity - opacity) > 0.001f) {
-        content.opacity = opacity;
+    if (fabsf(picture.opacity - opacity) > 0.001f) {
+        picture.opacity = opacity;
     }
-    return content;
 }
 
 // Puts a piece back at the bottom and lines its picture up. Only touches what
@@ -956,20 +937,25 @@ static void AlignPiece(UIView* view) {
     container.cornerRadius = layer.cornerRadius;
     container.maskedCorners = layer.maskedCorners;
     BOOL portal = PieceUsesPortal(view);
-    CALayer* content = container.sublayers.firstObject;
-    if (!content || IsPortal(content) != portal) {
-        content = PreparePieceContent(view, container, portal);
+    CALayer* mirror = PortalOfPiece(container);
+    CALayer* picture = container.sublayers.firstObject;
+    if (!picture || IsPortal(picture) || (mirror != nil) != portal) {
+        PreparePieceContent(view, container, portal);
+        mirror = PortalOfPiece(container);
+        picture = container.sublayers.firstObject;
     }
     // A portal just covers the part; it finds the wallpaper by itself.
-    CGRect frame = container.bounds;
-    if (!portal) {
+    if (mirror && !CGRectEqualToRect(mirror.frame, container.bounds)) {
+        mirror.frame = container.bounds;
+    }
+    if (!picture.hidden) {
         // In the container's coordinates, which start at the layer's bounds
         // origin.
-        frame = PictureFrameFor(view, nil);
+        CGRect frame = PictureFrameFor(view, nil);
         frame = CGRectOffset(frame, -container.frame.origin.x, -container.frame.origin.y);
-    }
-    if (!CGRectEqualToRect(content.frame, frame)) {
-        content.frame = frame;
+        if (!CGRectEqualToRect(picture.frame, frame)) {
+            picture.frame = frame;
+        }
     }
     [CATransaction commit];
 }
@@ -1037,7 +1023,7 @@ static void RealignPieces(UIWindow* window) {
 // again once X has finished putting the header and the screens back (a
 // cancelled swipe puts them back after reporting its end).
 static void SettlePiecesAfterTransition(UIWindow* window) {
-    if (!BarsOn || ![window isKindOfClass:UIWindow.class]) {
+    if (!WallpaperOn || ![window isKindOfClass:UIWindow.class]) {
         return;
     }
     for (UIView* view in WeakSet(&PiecesStorage).allObjects) {
@@ -1073,7 +1059,7 @@ static void MarkScrollAncestors(UIView* view) {
 }
 
 static void ScrollViewMoved(UIScrollView* scrollView) {
-    if (BarsOn && objc_getAssociatedObject(scrollView, ScrollHoldsPieceKey)) {
+    if (WallpaperOn && objc_getAssociatedObject(scrollView, ScrollHoldsPieceKey)) {
         RealignPieces(scrollView.window);
     }
 }
@@ -1108,45 +1094,7 @@ static UIView* ListBackgroundView(UIScrollView* list) {
     return [list respondsToSelector:@selector(backgroundView)] ? [(id)list backgroundView] : nil;
 }
 
-static void SetListBackgroundView(UIScrollView* list, UIView* view) {
-    if ([list respondsToSelector:@selector(setBackgroundView:)] && ListBackgroundView(list) != view) {
-        [(id)list setBackgroundView:view];
-    }
-}
-
-static void RemoveListWallpaper(UIScrollView* list) {
-    BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
-    if (!wallpaper) {
-        return;
-    }
-    if (ListBackgroundView(list) == wallpaper) {
-        id original = objc_getAssociatedObject(list, ListOriginalBackgroundViewKey);
-        SetListBackgroundView(list, [original isKindOfClass:UIView.class] ? original : nil);
-    }
-    objc_setAssociatedObject(list, ListWallpaperKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(list, ListOriginalBackgroundViewKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-}
-
-static BOOL ListHasWallpaper(UIScrollView* list) {
-    BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
-    return wallpaper && ListBackgroundView(list) == wallpaper;
-}
-
-// The timeline option: the picture as the list's backgroundView.
-static void ApplyListWallpaper(UIScrollView* list) {
-    BHTWallpaperView* wallpaper = objc_getAssociatedObject(list, ListWallpaperKey);
-    if (!wallpaper) {
-        wallpaper = [[BHTWallpaperView alloc] initWithFrame:list.bounds];
-        objc_setAssociatedObject(list, ListWallpaperKey, wallpaper, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(list, ListOriginalBackgroundViewKey, ListBackgroundView(list) ?: NSNull.null,
-                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    UpdateWallpaperView(wallpaper);
-    SetListBackgroundView(list, wallpaper);
-    [WeakSet(&WallpaperedListsStorage) addObject:list];
-}
-
-// A list made clear in "every screen" mode, in the current generation.
+// A list made clear, in the current generation.
 static BOOL IsHostList(UIScrollView* list) {
     NSNumber* generation = objc_getAssociatedObject(list, HostListKey);
     return generation && generation.unsignedIntegerValue == Generation;
@@ -1186,7 +1134,7 @@ static void PrepareCellContents(UIView* cell) {
 
 // From the timeline's willDisplayCell: every time, since X restyles cells.
 static void PrepareCell(UIView* cell, UIScrollView* list) {
-    if (!WallpaperOn || ![cell isKindOfClass:UIView.class] || !(ListHasWallpaper(list) || IsHostList(list))) {
+    if (!WallpaperOn || ![cell isKindOfClass:UIView.class] || !IsHostList(list)) {
         return;
     }
     PrepareCellContents(cell);
@@ -1214,10 +1162,10 @@ static void PrepareVisibleCells(UIScrollView* list) {
     }
 }
 
-// MARK: - Plates under screens (the "Keep X's own transitions" option)
+// MARK: - Plates under screens
 
-// With the option on, each screen (one of a navigation controller's), the
-// sidebar and the main content get a mirrored part of the wallpaper at their
+// Each screen (one of a navigation controller's), the sidebar and the main
+// content get a mirrored part of the wallpaper at their
 // bottom, a plate: the clear views in them show the wallpaper on it, and they
 // cover each other again as in the app. A new screen sliding in hides the
 // one under it, a swipe back uncovers it, the sidebar waits under the content
@@ -1254,7 +1202,7 @@ static void PaintPlate(UIView* view) {
 // their plates (an inner navigation controller's screen and the one it's
 // in).
 static void PlateScreensHolding(UIView* view) {
-    if (!PlatesOn || IsInsideSeeThroughPresentation(view)) {
+    if (!WallpaperOn || IsInsideSeeThroughPresentation(view)) {
         return;
     }
     UIWindow* window = view.window;
@@ -1324,7 +1272,7 @@ static BOOL NavigationBarWantsWallpaper(UINavigationBar* bar);
 // on screen or is restyled, and again once a screen has settled.
 static void PaintStrip(UIView* strip, BOOL inside) {
     UIWindow* window = strip.window;
-    if (!BarsOn || !IsAppWindow(window)) {
+    if (!WallpaperOn || !IsAppWindow(window)) {
         return;
     }
     CGFloat shortHeight = window.bounds.size.height * 0.25;
@@ -1388,7 +1336,7 @@ static NSHashTable* PendingStripsStorage;
 
 // Once X is done with this pass (restyling, reloading the tabs).
 static void SchedulePaintStrip(UIView* strip) {
-    if (!BarsOn || !strip) {
+    if (!WallpaperOn || !strip) {
         return;
     }
     NSHashTable* pending = WeakSet(&PendingStripsStorage);
@@ -1429,7 +1377,7 @@ static NSArray<UIView*>* StripsIn(UIView* root, NSUInteger limit) {
 
 - (void)layoutSubviews {
     %orig;
-    if (BarsOn) {
+    if (WallpaperOn) {
         UIView* strip = (UIView*)self;
         NSUInteger signature = StripSignature(strip);
         NSNumber* last = objc_getAssociatedObject(strip, StripPassKey);
@@ -1444,7 +1392,7 @@ static NSArray<UIView*>* StripsIn(UIView* root, NSUInteger limit) {
 
 - (void)didMoveToWindow {
     %orig;
-    if (BarsOn && ((UIView*)self).window) {
+    if (WallpaperOn && ((UIView*)self).window) {
         PaintStrip((UIView*)self, YES);
         SchedulePaintStrip((UIView*)self);
     }
@@ -1478,7 +1426,7 @@ static NSArray<UIView*>* StripsIn(UIView* root, NSUInteger limit) {
 
 - (void)setBackgroundColor:(UIColor*)color {
     %orig;
-    if (BarsOn) {
+    if (WallpaperOn) {
         for (UIView* strip in StripsIn((UIView*)self, 30)) {
             SchedulePaintStrip(strip);
         }
@@ -1624,7 +1572,7 @@ static void ServiceClearList(UIScrollView* list, BOOL force) {
 // A list in the theme color (or already clear) is made clear with its cells.
 // YES when its own color was cleared.
 static BOOL MakeListClear(UIScrollView* list) {
-    if (!FullOn || !IsAppWindow(list.window)) {
+    if (!WallpaperOn || !IsAppWindow(list.window)) {
         return NO;
     }
     if (IsHostList(list) || IsInsideSeeThroughPresentation(list)) {
@@ -1713,13 +1661,12 @@ static void ClearAllScreens(void) {
 
 static void ScheduleSettlePass(UIViewController* controller);
 static void ProcessThemedViews(BOOL beforeDrawing);
-static void EndFadesOf(UIViewController* controller, BOOL appearing);
 
 %hook UIViewController
 
 - (void)viewDidLayoutSubviews {
     %orig;
-    if (FullOn) {
+    if (WallpaperOn) {
         ClearController(self, NO);
     }
     // What X painted while laying this screen out, in the same frame.
@@ -1728,16 +1675,10 @@ static void EndFadesOf(UIViewController* controller, BOOL appearing);
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
-    EndFadesOf(self, YES);
-    if (FullOn) {
+    if (WallpaperOn) {
         ClearController(self, YES);
         ScheduleSettlePass(self);
     }
-}
-
-- (void)viewDidDisappear:(BOOL)animated {
-    %orig;
-    EndFadesOf(self, NO);
 }
 
 %end
@@ -1746,7 +1687,7 @@ static void EndFadesOf(UIViewController* controller, BOOL appearing);
 
 - (void)layoutSubviews {
     %orig;
-    if (FullOn) {
+    if (WallpaperOn) {
         if (IsHostList(self)) {
             ServiceClearList(self, NO);
         } else {
@@ -1761,7 +1702,7 @@ static void EndFadesOf(UIViewController* controller, BOOL appearing);
 
 - (void)layoutSubviews {
     %orig;
-    if (FullOn) {
+    if (WallpaperOn) {
         if (IsHostList(self)) {
             ServiceClearList(self, NO);
         } else {
@@ -1777,7 +1718,7 @@ static void EndFadesOf(UIViewController* controller, BOOL appearing);
 
 - (void)prepareForReuse {
     %orig;
-    if (FullOn) {
+    if (WallpaperOn) {
         objc_setAssociatedObject(self, CellPassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 }
@@ -1788,7 +1729,7 @@ static void EndFadesOf(UIViewController* controller, BOOL appearing);
 
 - (void)prepareForReuse {
     %orig;
-    if (FullOn) {
+    if (WallpaperOn) {
         objc_setAssociatedObject(self, CellPassKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 }
@@ -1797,165 +1738,7 @@ static void EndFadesOf(UIViewController* controller, BOOL appearing);
 
 // MARK: - Opening and closing screens
 
-// A new screen slides in over the old one (or the old one slides off over
-// the one below). With clear screens both would show at once, so they
-// cross-fade alongside the slide: the one leaving fades out, the one coming
-// in fades in. UIKit runs the fades with the slide, so an interactive swipe
-// back fades with the finger, and a cancelled one fades back.
-
-// Views fading and the navigation controllers moving them; whatever the
-// transitions report, every fade is undone once none of them is moving
-// (checked before each frame).
-static NSHashTable* FadingViewsStorage;
-static NSHashTable* FadingNavigationsStorage;
-// UIKit's shade views hidden during transitions.
-static NSHashTable* HiddenShadesStorage;
-// Screens that were ever faded (see ShowScreenAtNormalAlpha).
-static NSHashTable* FadedScreensStorage;
-
-// A view's own alpha while it fades, put back when the transition ends.
-static void RestoreFade(UIView* view) {
-    NSNumber* original = objc_getAssociatedObject(view, FadeAlphaKey);
-    if (!original) {
-        return;
-    }
-    objc_setAssociatedObject(view, FadeAlphaKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(view, FadeTransitionKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(view, FadeNavigationKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [WeakSet(&FadingViewsStorage) removeObject:view];
-    [UIView performWithoutAnimation:^{
-        view.alpha = original.doubleValue;
-    }];
-}
-
-// UIKit darkens the screen underneath while another slides over it, and
-// shades the moving screen's edge. Over clear screens that shows as a dark
-// veil on the wallpaper, so those views (which only live for the
-// transition) are hidden. Only empty plain views are ever hidden: the
-// screens, their wrappers and snapshots never are, even before UIKit has
-// put the screen inside them.
-static BOOL IsDarkShade(UIView* view) {
-    UIColor* color = view.backgroundColor;
-    if (!color) {
-        return NO;
-    }
-    CGFloat red = 1, green = 1, blue = 1, alpha = 0;
-    if (![color getRed:&red green:&green blue:&blue alpha:&alpha]) {
-        CGFloat white = 1;
-        if (![color getWhite:&white alpha:&alpha]) {
-            return NO;
-        }
-        red = green = blue = white;
-    }
-    return alpha > 0 && red < 0.2 && green < 0.2 && blue < 0.2;
-}
-
-static BOOL IsTransitionShade(UIView* view) {
-    if (view.subviews.count > 0 || view.hidden) {
-        return NO;
-    }
-    Class viewClass = view.class;
-    if (viewClass != UIView.class && viewClass != UIImageView.class) {
-        return NO;
-    }
-    if ([NSStringFromClass(view.superview.class) containsString:@"Dimming"]) {
-        return YES;
-    }
-    return viewClass == UIView.class && IsDarkShade(view);
-}
-
-static NSArray<UIView*>* HideTransitionDimming(UIView* container, UIView* fromView, UIView* toView) {
-    NSMutableArray<UIView*>* hidden = [NSMutableArray array];
-    NSMutableArray<UIView*>* queue = [container.subviews mutableCopy] ?: [NSMutableArray array];
-    for (NSUInteger i = 0; i < queue.count && i < 40; i++) {
-        UIView* view = queue[i];
-        if (view == fromView || view == toView || [view isKindOfClass:BHTWallpaperView.class] ||
-            [view.nextResponder isKindOfClass:UIViewController.class]) {
-            continue;
-        }
-        if (view.subviews.count > 0) {
-            // UIKit's dimming view wraps the screen: its shade is beside it.
-            BOOL holdsScreen = (fromView && [fromView isDescendantOfView:view]) ||
-                               (toView && [toView isDescendantOfView:view]);
-            if (holdsScreen || [NSStringFromClass(view.class) containsString:@"Dimming"]) {
-                [queue addObjectsFromArray:view.subviews];
-            }
-            continue;
-        }
-        if (IsTransitionShade(view)) {
-            view.hidden = YES;
-            [hidden addObject:view];
-            [WeakSet(&HiddenShadesStorage) addObject:view];
-        }
-    }
-    return hidden;
-}
-
-static void ShowShades(NSArray<UIView*>* shades) {
-    for (UIView* shade in shades) {
-        shade.hidden = NO;
-        [WeakSet(&HiddenShadesStorage) removeObject:shade];
-    }
-}
-
-// Fades `view` in (from clear) or out alongside the transition, once per
-// transition even when several pop calls report the same one. The start is
-// set again when the animation starts, in case X put the view back in the
-// meantime.
-static void FadeAlongside(UINavigationController* navigationController,
-                          id<UIViewControllerTransitionCoordinator> coordinator, UIView* view, BOOL fadeIn,
-                          UIView* fromView, UIView* toView) {
-    if (!view) {
-        return;
-    }
-    // Several pop calls can report the same transition: one fade each.
-    NSValue* transition = [NSValue valueWithPointer:(__bridge const void*)coordinator];
-    NSNumber* stored = objc_getAssociatedObject(view, FadeAlphaKey);
-    if (stored && [objc_getAssociatedObject(view, FadeTransitionKey) isEqual:transition]) {
-        return;
-    }
-    // A fade an earlier transition never undid keeps its real alpha, and this
-    // transition fades the view anyway.
-    CGFloat original = stored ? stored.doubleValue : view.alpha;
-    // A view X keeps hidden this way is left to X.
-    if (original < 0.01) {
-        return;
-    }
-    objc_setAssociatedObject(view, FadeAlphaKey, @(original), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(view, FadeTransitionKey, transition, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(view, FadeNavigationKey,
-                             [NSValue valueWithPointer:(__bridge const void*)navigationController],
-                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if ([view.nextResponder isKindOfClass:UIViewController.class]) {
-        objc_setAssociatedObject(view, ScreenNormalAlphaKey, @(original), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        [WeakSet(&FadedScreensStorage) addObject:view];
-    }
-    [WeakSet(&FadingViewsStorage) addObject:view];
-    [WeakSet(&FadingNavigationsStorage) addObject:navigationController];
-    if (fadeIn) {
-        [UIView performWithoutAnimation:^{
-            view.alpha = 0;
-        }];
-    }
-    __block NSArray<UIView*>* shades = nil;
-    [coordinator
-        animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
-            shades = HideTransitionDimming(context.containerView, fromView, toView);
-            if (fadeIn) {
-                [UIView performWithoutAnimation:^{
-                    view.alpha = 0;
-                }];
-            }
-            view.alpha = fadeIn ? original : 0;
-        }
-        completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
-            ShowShades(shades);
-            RestoreFade(view);
-        }];
-}
-
-// The strip X shows in the header for a screen (Following/For you...): it
-// belongs to the screen, so it fades with it.
+// The strip X shows in the header for a screen (Following/For you...).
 static UIView* HeaderAccessoryOf(UIViewController* controller) {
     SEL getter = @selector(tfn_navigationBarAccessoryView);
     NSMutableArray<UIViewController*>* queue = [NSMutableArray arrayWithObject:controller];
@@ -1969,178 +1752,12 @@ static UIView* HeaderAccessoryOf(UIViewController* controller) {
     return nil;
 }
 
-// UIKit's own coordinator for a navigation controller's transition. X's tab
-// navigation controller answers transitionCoordinator with one of its own,
-// which can still be an earlier transition's (right after a post was
-// opened), so UIKit's is asked directly.
-static id<UIViewControllerTransitionCoordinator> UIKitTransitionCoordinator(UINavigationController* navigationController) {
-    static IMP uikitGetter;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        uikitGetter = [UINavigationController instanceMethodForSelector:@selector(transitionCoordinator)];
-    });
-    return uikitGetter ? ((id (*)(id, SEL))uikitGetter)(navigationController, @selector(transitionCoordinator)) : nil;
-}
-
-// The coordinator of the push or pop that just started: UIKit's or X's,
-// whichever really moves `expectedFrom` (the screen being popped) or
-// `expectedTo` (the screen being pushed).
-static id<UIViewControllerTransitionCoordinator> CoordinatorFor(UINavigationController* navigationController,
-                                                                 UIViewController* expectedFrom,
-                                                                 UIViewController* expectedTo) {
-    id<UIViewControllerTransitionCoordinator> candidates[2] = {
-        UIKitTransitionCoordinator(navigationController), navigationController.transitionCoordinator};
-    for (int i = 0; i < 2; i++) {
-        id<UIViewControllerTransitionCoordinator> coordinator = candidates[i];
-        if (!coordinator || !coordinator.isAnimated) {
-            continue;
-        }
-        UIViewController* from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
-        UIViewController* to = [coordinator viewControllerForKey:UITransitionContextToViewControllerKey];
-        if ((!expectedFrom || from == expectedFrom) && (!expectedTo || to == expectedTo)) {
-            return coordinator;
-        }
-    }
-    return nil;
-}
-
-// X's own navigation controllers, whose transitions show the wallpaper
-// through their overlay instead (see "X's own transitions").
-static BOOL UsesTransitionOverlay(UINavigationController* navigationController) {
-    static Class navigationClass;
-    static BOOL overlayAvailable;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        navigationClass = objc_getClass("TFNNavigationController");
-        overlayAvailable = objc_getClass("TFNNavigationControllerTransitionAnimator") != nil;
-    });
-    return overlayAvailable && navigationClass && [navigationController isKindOfClass:navigationClass];
-}
-
-static void CrossFadeScreens(UINavigationController* navigationController, UIViewController* expectedFrom,
-                             UIViewController* expectedTo) {
-    // With plates the screens cover each other by themselves.
-    if (!FullOn || PlatesOn || UsesTransitionOverlay(navigationController)) {
-        return;
-    }
-    id<UIViewControllerTransitionCoordinator> coordinator =
-        CoordinatorFor(navigationController, expectedFrom, expectedTo);
-    if (!coordinator) {
-        return;
-    }
-    UIViewController* from = [coordinator viewControllerForKey:UITransitionContextFromViewControllerKey];
-    UIViewController* to = [coordinator viewControllerForKey:UITransitionContextToViewControllerKey];
-    UIView* fromView = from.viewIfLoaded;
-    UIView* toView = to.viewIfLoaded;
-    if (!fromView || !IsAppWindow(fromView.window)) {
-        return;
-    }
-    FadeAlongside(navigationController, coordinator, fromView, NO, fromView, toView);
-    if (toView && toView != fromView) {
-        FadeAlongside(navigationController, coordinator, toView, YES, fromView, toView);
-    }
-    UIView* fromAccessory = from ? HeaderAccessoryOf(from) : nil;
-    UIView* toAccessory = to ? HeaderAccessoryOf(to) : nil;
-    if (fromAccessory && fromAccessory != toAccessory) {
-        FadeAlongside(navigationController, coordinator, fromAccessory, NO, fromView, toView);
-    }
-    if (toAccessory && toAccessory != fromAccessory) {
-        FadeAlongside(navigationController, coordinator, toAccessory, YES, fromView, toView);
-    }
-}
-
-// A screen has finished appearing or disappearing: its transition is over,
-// whatever the transition reported, so its fades (and its header strip's)
-// are undone. A screen that was ever faded and now appears gets its normal
-// alpha back even if something set it again after the fade ended, now and
-// once more right after (the transition may still be cleaning up), unless a
-// new transition is fading it by then.
-static void ShowScreenAtNormalAlpha(UIView* view) {
-    NSNumber* normal = objc_getAssociatedObject(view, ScreenNormalAlphaKey);
-    if (!normal || objc_getAssociatedObject(view, FadeAlphaKey)) {
-        return;
-    }
-    if (fabs(view.alpha - normal.doubleValue) > 0.01) {
-        [UIView performWithoutAnimation:^{
-            view.alpha = normal.doubleValue;
-        }];
-    }
-}
-
-static void EndFadesOf(UIViewController* controller, BOOL appearing) {
-    UIView* view = controller.viewIfLoaded;
-    if (!view) {
-        return;
-    }
-    if (WeakSet(&FadingViewsStorage).count > 0) {
-        RestoreFade(view);
-        UIView* accessory = HeaderAccessoryOf(controller);
-        if (accessory) {
-            RestoreFade(accessory);
-        }
-    }
-    if (appearing && objc_getAssociatedObject(view, ScreenNormalAlphaKey)) {
-        ShowScreenAtNormalAlpha(view);
-        __weak UIView* weakView = view;
-        dispatch_async(dispatch_get_main_queue(), ^{
-            UIView* strongView = weakView;
-            if (strongView) {
-                ShowScreenAtNormalAlpha(strongView);
-            }
-        });
-    }
-}
-
-// Before each frame: once no navigation controller that started a fade is
-// moving any more (finished, cancelled, or a transition that never reported
-// its end), every fade is undone and every hidden shade shown again. Shades
-// that turned out to hold something are shown at once.
-static void SettleTransitions(void) {
-    for (UIView* shade in WeakSet(&HiddenShadesStorage).allObjects) {
-        if (shade.subviews.count > 0) {
-            shade.hidden = NO;
-            [WeakSet(&HiddenShadesStorage) removeObject:shade];
-        }
-    }
-    // The screen on top of its navigation controller, with no fade running
-    // on it, is never left see-through.
-    for (UIView* screen in WeakSet(&FadedScreensStorage).allObjects) {
-        if (!screen.window || objc_getAssociatedObject(screen, FadeAlphaKey)) {
-            continue;
-        }
-        UIViewController* controller = (UIViewController*)screen.nextResponder;
-        if (![controller isKindOfClass:UIViewController.class]) {
-            continue;
-        }
-        UINavigationController* navigationController = controller.navigationController;
-        if (navigationController && navigationController.topViewController != controller) {
-            continue;
-        }
-        ShowScreenAtNormalAlpha(screen);
-    }
-    NSHashTable* fading = WeakSet(&FadingViewsStorage);
-    if (fading.count == 0) {
-        return;
-    }
-    for (UINavigationController* navigationController in WeakSet(&FadingNavigationsStorage).allObjects) {
-        if (UIKitTransitionCoordinator(navigationController)) {
-            return;
-        }
-    }
-    for (UIView* view in fading.allObjects) {
-        RestoreFade(view);
-    }
-    [fading removeAllObjects];
-    [WeakSet(&FadingNavigationsStorage) removeAllObjects];
-    ShowShades(WeakSet(&HiddenShadesStorage).allObjects);
-}
-
 static void PaintNavigationBar(UINavigationBar* bar, BOOL force);
 
 // A screen's header, painted now: what X painted since the last pass, its
 // strip, and the header itself.
 static void PrepaintHeaderOf(UIViewController* controller) {
-    if (!BarsOn || ![controller isKindOfClass:UIViewController.class]) {
+    if (!WallpaperOn || ![controller isKindOfClass:UIViewController.class]) {
         return;
     }
     ProcessThemedViews(NO);
@@ -2156,59 +1773,11 @@ static void PrepaintHeaderOf(UIViewController* controller) {
     }
 }
 
-// X's navigation controller finished its own transition animation (done or
-// cancelled): every fade it started ends now.
-static void EndNavigationFades(UINavigationController* navigationController) {
-    NSValue* navigation = [NSValue valueWithPointer:(__bridge const void*)navigationController];
-    for (UIView* view in WeakSet(&FadingViewsStorage).allObjects) {
-        if ([objc_getAssociatedObject(view, FadeNavigationKey) isEqual:navigation]) {
-            RestoreFade(view);
-        }
-    }
-    ShowShades(WeakSet(&HiddenShadesStorage).allObjects);
-}
-
-%hook UINavigationController
-
-- (void)pushViewController:(UIViewController*)viewController animated:(BOOL)animated {
-    %orig;
-    if (animated) {
-        CrossFadeScreens(self, nil, viewController);
-    }
-}
-
-- (UIViewController*)popViewControllerAnimated:(BOOL)animated {
-    UIViewController* popped = %orig;
-    if (animated && popped) {
-        CrossFadeScreens(self, popped, nil);
-    }
-    return popped;
-}
-
-- (NSArray*)popToViewController:(UIViewController*)viewController animated:(BOOL)animated {
-    NSArray* popped = %orig;
-    if (animated && popped.count) {
-        CrossFadeScreens(self, popped.lastObject, viewController);
-    }
-    return popped;
-}
-
-- (NSArray*)popToRootViewControllerAnimated:(BOOL)animated {
-    NSArray* popped = %orig;
-    if (animated && popped.count) {
-        CrossFadeScreens(self, popped.lastObject, self.viewControllers.firstObject);
-    }
-    return popped;
-}
-
-%end
-
 %group TFNTransitions
 %hook TFNNavigationController
 
 - (void)_tfn_transitionAnimationCompletedIsCanceled:(BOOL)canceled isPush:(BOOL)push {
     %orig;
-    EndNavigationFades((UINavigationController*)self);
     SettlePiecesAfterTransition(((UINavigationController*)self).viewIfLoaded.window);
 }
 
@@ -2233,16 +1802,13 @@ static void EndNavigationFades(UINavigationController* navigationController) {
 
 // X's navigation controllers move screens with their own animator, which
 // darkens the screen underneath with an overlay that follows the slide (and
-// the finger on a swipe back, cancelled ones included). In "every screen"
-// mode that overlay is the wallpaper itself: the screen underneath is
-// covered by the wallpaper as a new one slides in over it, and uncovered as
-// a swipe back goes on. The screens' own alpha is never touched there, so
-// X's transition code (which also rearranges the header) finds them as it
-// left them. With plates the screens cover each other, so the overlay keeps
-// X's own strength and nothing else is added.
+// the finger on a swipe back, cancelled ones included). The screens have
+// plates, so they cover each other as in the app and the animation runs as
+// it is; only the overlay shows the wallpaper, at X's own strength, instead
+// of black.
 
-// The overlay in the theme color, fully covering at its strongest; X's own
-// color is put back when the mode is off.
+// The overlay in the theme color (it gets the picture once X has added it);
+// X's own color is put back when the wallpaper is off.
 static void PrepareTransitionOverlay(id animator) {
     SEL setter = @selector(setBackgroundViewOverlayColor:maximumAlpha:);
     SEL alphaGetter = @selector(maximumAlpha);
@@ -2251,7 +1817,7 @@ static void PrepareTransitionOverlay(id animator) {
     }
     double maximumAlpha = ((double (*)(id, SEL))objc_msgSend)(animator, alphaGetter);
     id saved = objc_getAssociatedObject(animator, OverlayOriginalColorKey);
-    if (FullOn) {
+    if (WallpaperOn) {
         if (!saved) {
             id original = objectIvar(animator, "_backgroundViewOverlayColor");
             objc_setAssociatedObject(animator, OverlayOriginalColorKey,
@@ -2285,9 +1851,8 @@ static NSArray<UIView*>* TransitionOverlayCandidates(id<UIViewControllerContextT
 }
 
 // The overlay X just added (a new screen-sized view in the theme color, not
-// a screen or one holding a screen) gets the picture. How many were found.
-static NSUInteger PaintTransitionOverlay(id<UIViewControllerContextTransitioning> transition, NSHashTable* before) {
-    NSUInteger painted = 0;
+// a screen or one holding a screen) gets the picture.
+static void PaintTransitionOverlay(id<UIViewControllerContextTransitioning> transition, NSHashTable* before) {
     UIView* container = transition.containerView;
     UIView* fromView = [transition viewControllerForKey:UITransitionContextFromViewControllerKey].viewIfLoaded;
     UIView* toView = [transition viewControllerForKey:UITransitionContextToViewControllerKey].viewIfLoaded;
@@ -2306,119 +1871,7 @@ static NSUInteger PaintTransitionOverlay(id<UIViewControllerContextTransitioning
         }
         objc_setAssociatedObject(view, PlateKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         PaintPiece(view);
-        painted++;
     }
-    return painted;
-}
-
-// Opening a screen when X's animator didn't dim the one underneath: a
-// wallpaper overlay of our own goes over it, between the two screens, and
-// fades in over the slide, so the old screen fades out as the new one comes
-// in. It's removed when the transition ends.
-static void AddPushOverlay(id animator, id<UIViewControllerContextTransitioning> transition) {
-    if (transition.isInteractive) {
-        return;
-    }
-    UIView* container = transition.containerView;
-    UIView* fromView = [transition viewControllerForKey:UITransitionContextFromViewControllerKey].viewIfLoaded;
-    UIView* toView = [transition viewControllerForKey:UITransitionContextToViewControllerKey].viewIfLoaded;
-    if (!container || !fromView || ![fromView isDescendantOfView:container]) {
-        return;
-    }
-    UIView* holder = fromView;
-    while (holder.superview && holder.superview != container) {
-        holder = holder.superview;
-    }
-    if (holder.superview != container || (toView && [toView isDescendantOfView:holder])) {
-        return;
-    }
-    BHTWallpaperView* overlay = [[BHTWallpaperView alloc] initWithFrame:container.bounds];
-    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    UpdateWallpaperView(overlay);
-    overlay.alpha = 0;
-    [container insertSubview:overlay aboveSubview:holder];
-    NSMutableArray<UIView*>* added = objc_getAssociatedObject(animator, AddedOverlaysKey);
-    if (!added) {
-        added = [NSMutableArray array];
-        objc_setAssociatedObject(animator, AddedOverlaysKey, added, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    [added addObject:overlay];
-    NSTimeInterval duration = 0.3;
-    if ([animator respondsToSelector:@selector(transitionDuration:)]) {
-        duration = ((NSTimeInterval (*)(id, SEL, id))objc_msgSend)(animator, @selector(transitionDuration:),
-                                                                   transition);
-    }
-    [UIView animateWithDuration:duration
-                          delay:0
-                        options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
-                     animations:^{
-                         overlay.alpha = 1;
-                     }
-                     completion:nil];
-}
-
-// Opening a screen: the header strip of the screen being left (and X's
-// snapshot of its header, which X shows while the header changes over)
-// fades out with it. Their alpha is put back when the transition ends.
-static void FadeOutHeaderForPush(id animator, id<UIViewControllerContextTransitioning> transition) {
-    if (transition.isInteractive) {
-        return;
-    }
-    UIViewController* from = [transition viewControllerForKey:UITransitionContextFromViewControllerKey];
-    UINavigationController* navigationController = from.navigationController;
-    if (![navigationController isKindOfClass:UINavigationController.class]) {
-        navigationController = objectIvar(animator, "_navigationController");
-    }
-    NSMutableArray<UIView*>* views = [NSMutableArray array];
-    UIView* accessory = from ? HeaderAccessoryOf(from) : nil;
-    if (accessory) {
-        [views addObject:accessory];
-    }
-    UIView* snapshot = objectIvar(navigationController, "_glassBarTransitionSnapshot");
-    if ([snapshot isKindOfClass:UIView.class] && snapshot != accessory) {
-        [views addObject:snapshot];
-    }
-    NSMutableArray* faded = objc_getAssociatedObject(animator, AddedFadesKey);
-    if (!faded) {
-        faded = [NSMutableArray array];
-        objc_setAssociatedObject(animator, AddedFadesKey, faded, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    NSTimeInterval duration = 0.3;
-    if ([animator respondsToSelector:@selector(transitionDuration:)]) {
-        duration = ((NSTimeInterval (*)(id, SEL, id))objc_msgSend)(animator, @selector(transitionDuration:),
-                                                                   transition);
-    }
-    for (UIView* view in views) {
-        if (!view.window || view.alpha < 0.01) {
-            continue;
-        }
-        [faded addObject:@[view, @(view.alpha)]];
-        [UIView animateWithDuration:duration
-                              delay:0
-                            options:UIViewAnimationOptionCurveEaseOut | UIViewAnimationOptionAllowUserInteraction
-                         animations:^{
-                             view.alpha = 0;
-                         }
-                         completion:nil];
-    }
-}
-
-static void RemoveAddedOverlays(id animator) {
-    NSMutableArray<UIView*>* added = objc_getAssociatedObject(animator, AddedOverlaysKey);
-    for (UIView* overlay in added) {
-        [overlay removeFromSuperview];
-    }
-    [added removeAllObjects];
-    NSMutableArray* faded = objc_getAssociatedObject(animator, AddedFadesKey);
-    for (NSArray* entry in faded) {
-        UIView* view = entry[0];
-        CGFloat alpha = [entry[1] doubleValue];
-        [view.layer removeAnimationForKey:@"opacity"];
-        [UIView performWithoutAnimation:^{
-            view.alpha = alpha;
-        }];
-    }
-    [faded removeAllObjects];
 }
 
 // X's animator slides the screens with Core Animation: a screen's real
@@ -2428,7 +1881,7 @@ static void RemoveAddedOverlays(id animator) {
 // screen's slide, with the same timing: it stays still against the
 // wallpaper the whole way, follows the finger on a swipe back, and runs
 // backwards with a cancelled one. Everything is lined up again when the
-// transition ends.
+// transition ends. Mirrored parts stay with the wallpaper by themselves.
 
 // The slide moving `view`: the position animation on it or the nearest
 // view holding it, as a change relative to where it ends up.
@@ -2485,9 +1938,10 @@ static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> 
         if (view.window != window) {
             continue;
         }
-        CALayer* picture = PieceLayer(view, NO).sublayers.firstObject;
+        CALayer* container = PieceLayer(view, NO);
+        CALayer* picture = container.sublayers.firstObject;
         // A mirrored part already stays with the wallpaper.
-        if (!picture || IsPortal(picture)) {
+        if (!picture || PortalOfPiece(container)) {
             continue;
         }
         CGPoint fromOffset = CGPointZero;
@@ -2511,8 +1965,7 @@ static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> 
 
 - (void)animateTransition:(id<UIViewControllerContextTransitioning>)transition {
     PrepareTransitionOverlay(self);
-    RemoveAddedOverlays(self);
-    if (!FullOn) {
+    if (!WallpaperOn) {
         %orig;
         return;
     }
@@ -2522,29 +1975,14 @@ static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> 
         [before addObject:view];
     }
     %orig;
-    NSUInteger painted = PaintTransitionOverlay(transition, before);
+    PaintTransitionOverlay(transition, before);
     HoldPiecesStillDuringSlide(transition);
     objc_setAssociatedObject(self, TransitionWindowKey, [NSValue valueWithNonretainedObject:transition.containerView.window],
                              OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    // With plates X's animation runs as it is: only its overlay shows the
-    // wallpaper, at X's own strength. No overlay or fade of our own.
-    if (PlatesOn) {
-        return;
-    }
-    long long operation = [(id)self respondsToSelector:@selector(operation)]
-                              ? ((long long (*)(id, SEL))objc_msgSend)(self, @selector(operation))
-                              : 0;
-    if (operation == UINavigationControllerOperationPush) {
-        if (painted == 0) {
-            AddPushOverlay(self, transition);
-        }
-        FadeOutHeaderForPush(self, transition);
-    }
 }
 
 - (void)animationEnded:(BOOL)transitionCompleted {
     %orig;
-    RemoveAddedOverlays(self);
     // Parts lined up for where the screens would end up: lined up again for
     // where they are (a cancelled swipe puts them back).
     UIWindow* window = [objc_getAssociatedObject(self, TransitionWindowKey) nonretainedObjectValue];
@@ -2552,30 +1990,48 @@ static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> 
     SettlePiecesAfterTransition(window);
 }
 
-- (double)_tfn_maximumAlphaForTransition:(id)transition {
-    return FullOn && !PlatesOn ? 1.0 : %orig;
-}
-
-- (BOOL)suppressDimming {
-    return FullOn && !PlatesOn ? NO : %orig;
-}
-
 %end
 %end
 
 // MARK: - Header and tab bar
 
-// Headers of the tabs, or every header in "every screen" mode.
+// Every header.
 static BOOL NavigationBarWantsWallpaper(UINavigationBar* bar) {
-    if (!BarsOn || !bar) {
-        return NO;
+    return WallpaperOn && bar != nil;
+}
+
+// A header's item (a button's or a picture's platter), as opposed to its
+// background, which spans the bar.
+static BOOL IsHeaderItem(UIView* view, UINavigationBar* bar) {
+    return view != bar && view.bounds.size.width < bar.bounds.size.width * 0.8;
+}
+
+// Whether the header's background has its part.
+static BOOL BarIsBacked(UINavigationBar* bar) {
+    NSNumber* generation = objc_getAssociatedObject(bar, BarBackedKey);
+    return generation && generation.unsignedIntegerValue == Generation;
+}
+
+// A header view in the theme color: the header's background gets its part;
+// an item on it is made clear over that part instead, so X's copies of the
+// items (moving through a swipe back) carry no square of the theme color.
+static void PaintHeaderView(UIView* view, UINavigationBar* bar) {
+    if (IsHeaderItem(view, bar) && BarIsBacked(bar)) {
+        CALayer* container = PieceLayer(view, NO);
+        if (container.superlayer) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            [container removeFromSuperlayer];
+            [CATransaction commit];
+        }
+        [WeakSet(&PiecesStorage) removeObject:view];
+        ClearThemeColor(view, 0.5);
+        return;
     }
-    if (FullOn) {
-        return YES;
+    PaintPiece(view);
+    if (!IsHeaderItem(view, bar) && PieceLayer(view, NO).superlayer == view.layer) {
+        objc_setAssociatedObject(bar, BarBackedKey, @(Generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    Class tabNavigationClass = objc_getClass("T1TabNavigationController");
-    id delegate = bar.delegate;
-    return tabNavigationClass && [delegate isKindOfClass:tabNavigationClass];
 }
 
 // Every layer of the header painted in the theme color gets its part (content
@@ -2599,6 +2055,8 @@ static void PaintNavigationBar(UINavigationBar* bar, BOOL force) {
     NSNumber* last = objc_getAssociatedObject(bar, BarPassKey);
     if (force || !last || last.unsignedIntegerValue != signature) {
         objc_setAssociatedObject(bar, BarPassKey, @(signature), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // The background first, then the items on it.
+        NSMutableArray<UIView*>* items = [NSMutableArray array];
         NSMutableArray<UIView*>* queue = [NSMutableArray arrayWithObject:bar];
         for (NSUInteger i = 0; i < queue.count && i < 150; i++) {
             UIView* view = queue[i];
@@ -2618,13 +2076,20 @@ static void PaintNavigationBar(UINavigationBar* bar, BOOL force) {
                 continue;
             }
             if (CanPaint(view, 0.5) && FitsInBar(view, bar)) {
-                PaintPiece(view);
+                if (IsHeaderItem(view, bar)) {
+                    [items addObject:view];
+                } else {
+                    PaintHeaderView(view, bar);
+                }
             }
             if ([view isKindOfClass:UIImageView.class] || [view isKindOfClass:UILabel.class] ||
                 [view isKindOfClass:UITextView.class]) {
                 continue;
             }
             [queue addObjectsFromArray:view.subviews];
+        }
+        for (UIView* item in items) {
+            PaintHeaderView(item, bar);
         }
     }
     RealignPieces(bar.window);
@@ -2639,13 +2104,7 @@ static void SettleScreen(UIViewController* controller) {
     if (!root || !IsAppWindow(root.window)) {
         return;
     }
-    if (FullOn) {
-        ClearController(controller, YES);
-    } else {
-        for (UIView* strip in StripsIn(root, 200)) {
-            PaintStrip(strip, YES);
-        }
-    }
+    ClearController(controller, YES);
     UINavigationBar* bar = controller.navigationController.navigationBar;
     if (NavigationBarWantsWallpaper(bar)) {
         PaintNavigationBar(bar, YES);
@@ -2653,7 +2112,7 @@ static void SettleScreen(UIViewController* controller) {
 }
 
 static void ScheduleSettlePass(UIViewController* controller) {
-    if (!BarsOn || !controller) {
+    if (!WallpaperOn || !controller) {
         return;
     }
     NSHashTable* pending = WeakSet(&SettlingControllersStorage);
@@ -2694,7 +2153,7 @@ static void AttachTabBarWallpaper(UIViewController* tabBarController) {
         return;
     }
     BHTWallpaperView* slice = objc_getAssociatedObject(background, TabBarWallpaperKey);
-    if (!BarsOn || ViewDrawsItself(background)) {
+    if (!WallpaperOn || ViewDrawsItself(background)) {
         [slice removeFromSuperview];
         return;
     }
@@ -2720,7 +2179,7 @@ static void AttachTabBarWallpaper(UIViewController* tabBarController) {
 
 // Now and once X is done with this pass.
 static void RefreshTabBarWallpaper(UIViewController* tabBarController) {
-    if (!BarsOn) {
+    if (!WallpaperOn) {
         return;
     }
     [WeakSet(&SeenTabBarControllersStorage) addObject:tabBarController];
@@ -2728,7 +2187,7 @@ static void RefreshTabBarWallpaper(UIViewController* tabBarController) {
     __weak UIViewController* weakController = tabBarController;
     dispatch_async(dispatch_get_main_queue(), ^{
         UIViewController* controller = weakController;
-        if (controller && BarsOn) {
+        if (controller && WallpaperOn) {
             AttachTabBarWallpaper(controller);
         }
     });
@@ -2749,14 +2208,11 @@ static void ReapplyWallpaper(void);
 // view, recorded as they lay out.
 static __weak UIViewController* AppSplit;
 static __weak UIView* SidebarView;
-// The sidebar view whose alpha was changed, to put back.
-static __weak UIView* FadedSidebar;
-static BOOL OpenPercentIsHundredths;
 
 // The backs and parts stay at the bottom of their views as the app's
 // containers lay out and the content slides for the sidebar.
 static void KeepMainBackInPlace(UIWindow* window) {
-    if (BarsOn) {
+    if (WallpaperOn) {
         RealignPieces(window);
     }
 }
@@ -2783,74 +2239,10 @@ static UIView* SidebarOf(UIViewController* split) {
     return view ?: SidebarView;
 }
 
-// How far the sidebar is open, 0 to 1: what X reports, or how far the
-// content has slid aside for it, whichever is further (so the sidebar is
-// never left hidden while open).
-static CGFloat SidebarOpenFraction(UIViewController* split, UIView* sidebar) {
-    CGFloat fraction = 0;
-    SEL getter = @selector(dashPanelOpenPercent);
-    if ([split respondsToSelector:getter]) {
-        double percent = ((double (*)(id, SEL))objc_msgSend)(split, getter);
-        if (!isnan(percent)) {
-            // Taken as 0 to 1; a value well past 1 means X counts to 100.
-            if (percent > 1.5) {
-                OpenPercentIsHundredths = YES;
-            }
-            if (OpenPercentIsHundredths) {
-                percent /= 100.0;
-            }
-            fraction = MAX(0.0, MIN(1.0, percent));
-        }
-    }
-    UIView* content = objectIvar(split, "_contentHostView");
-    UIView* splitView = split.viewIfLoaded;
-    CGFloat width = sidebar.bounds.size.width;
-    if ([content isKindOfClass:UIView.class] && splitView && content.window == splitView.window && width > 1) {
-        CGFloat moved = fabs([content convertPoint:CGPointZero toView:splitView].x);
-        fraction = MAX(fraction, MIN(1.0, moved / width));
-    }
-    return fraction;
-}
-
-// On a phone the content covers the waiting sidebar; a sidebar always beside
-// the content (a wide screen) is left alone.
-static BOOL SidebarWaitsBehindContent(UIViewController* split, UIView* sidebar) {
-    UIView* content = objectIvar(split, "_contentHostView");
-    if (![content isKindOfClass:UIView.class] || content.window != sidebar.window) {
-        return YES;
-    }
-    CGRect sidebarFrame = [sidebar convertRect:sidebar.bounds toView:nil];
-    CGRect contentFrame = [content convertRect:content.bounds toView:nil];
-    return CGRectIntersectsRect(CGRectInset(sidebarFrame, 1, 1), contentFrame);
-}
-
-static void SetSidebarAlpha(UIViewController* split, UIView* sidebar, CGFloat alpha) {
-    if (fabs(sidebar.alpha - alpha) < 0.005) {
-        return;
-    }
-    // Inside X's own animation of the slide: the fade runs with it.
-    if ([UIView inheritedAnimationDuration] > 0) {
-        sidebar.alpha = alpha;
-        return;
-    }
-    UIViewPropertyAnimator* animator = BHTSafeObject(split, @selector(dashContentOffsetAnimator));
-    if ([animator isKindOfClass:UIViewPropertyAnimator.class] && animator.state == UIViewAnimatingStateActive &&
-        animator.isRunning) {
-        [animator addAnimations:^{
-            sidebar.alpha = alpha;
-        }];
-        return;
-    }
-    // X's spring moves the content a step at a time: the fade follows step by step.
-    [UIView performWithoutAnimation:^{
-        sidebar.alpha = alpha;
-    }];
-}
-
 // X darkens the content (and the sidebar) with an overlay as the sidebar
-// opens. Over the wallpaper that's a dark veil, so in "every screen" mode the
-// overlay's color is made clear; the overlay itself stays (it takes the tap
-// that closes the sidebar). Its color is put back when the mode is off.
+// opens. Over the wallpaper that's a dark veil, so the overlay's color is
+// made clear; the overlay itself stays (it takes the tap that closes the
+// sidebar). Its color is put back when the wallpaper is off.
 // Views made clear here, with their color kept to put back.
 static NSHashTable* ClearedVeilsStorage;
 
@@ -2886,7 +2278,7 @@ static BOOL IsDarkVeil(UIView* view) {
 }
 
 static void ClearSidebarOverlays(UIViewController* split) {
-    if (!FullOn) {
+    if (!WallpaperOn) {
         for (UIView* veil in WeakSet(&ClearedVeilsStorage).allObjects) {
             UIColor* original = objc_getAssociatedObject(veil, OverlayBackgroundKey);
             objc_setAssociatedObject(veil, OverlayBackgroundKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -2924,27 +2316,10 @@ static void ClearSidebarOverlays(UIViewController* split) {
     }
 }
 
-// The sidebar's alpha follows how far it's open in "every screen" mode, so it
-// isn't seen through the clear content while it waits. With plates the
-// content covers it instead, as in the app.
-static void UpdateSidebarFade(UIViewController* split) {
-    ClearSidebarOverlays(split);
-    UIView* sidebar = SidebarOf(split);
-    if (FullOn && !PlatesOn && sidebar && IsAppWindow(sidebar.window) && SidebarWaitsBehindContent(split, sidebar)) {
-        FadedSidebar = sidebar;
-        SetSidebarAlpha(split, sidebar, SidebarOpenFraction(split, sidebar));
-        return;
-    }
-    UIView* faded = FadedSidebar;
-    if (faded) {
-        FadedSidebar = nil;
-        SetSidebarAlpha(split, faded, 1);
-    }
-}
-
-// With plates: the main content's and the sidebar's.
+// The main content's plate and the sidebar's: the content covers the
+// sidebar waiting under it, as in the app.
 static void PaintAppPlates(UIViewController* split) {
-    if (!PlatesOn || !split) {
+    if (!WallpaperOn || !split) {
         return;
     }
     UIView* content = objectIvar(split, "_contentHostView");
@@ -2959,18 +2334,18 @@ static void PaintAppPlates(UIViewController* split) {
 
 static void SidebarMoved(UIViewController* split) {
     AppSplit = split;
-    UpdateSidebarFade(split);
+    ClearSidebarOverlays(split);
     PaintAppPlates(split);
     KeepMainBackInPlace(split.viewIfLoaded.window);
 }
 
 // The shade X lays over the content's edge (and over it as the sidebar
-// opens) stays off in "every screen" mode.
+// opens) stays off with the wallpaper.
 %group SplitHost
 %hook T1AppSplitHostView
 
 - (void)setShadowAlpha:(double)alpha {
-    %orig(FullOn ? 0 : alpha);
+    %orig(WallpaperOn ? 0 : alpha);
 }
 
 %end
@@ -3007,7 +2382,7 @@ static void SidebarMoved(UIViewController* split) {
     %orig;
     SidebarMoved((UIViewController*)self);
     // X restyles the content as the sidebar settles: a full pass once it's done.
-    if (FullOn) {
+    if (WallpaperOn) {
         dispatch_async(dispatch_get_main_queue(), ^{
             ReapplyWallpaper();
         });
@@ -3044,7 +2419,7 @@ static void SidebarMoved(UIViewController* split) {
 - (void)viewDidLayoutSubviews {
     %orig;
     [WeakSet(&SeenTabBarControllersStorage) addObject:(UIViewController*)self];
-    if (BarsOn) {
+    if (WallpaperOn) {
         AttachTabBarWallpaper((UIViewController*)self);
     }
     KeepMainBackInPlace(((UIViewController*)self).viewIfLoaded.window);
@@ -3066,19 +2441,6 @@ static void SidebarMoved(UIViewController* split) {
 
 // MARK: - Timelines
 
-// Timelines in a tab, the base option.
-static BOOL ControllerWantsWallpaper(UIViewController* controller, UIScrollView* list) {
-    if (!WallpaperOn || !list) {
-        return NO;
-    }
-    Class tabNavigationClass = objc_getClass("T1TabNavigationController");
-    UINavigationController* navigationController = controller.navigationController;
-    if (!tabNavigationClass || ![navigationController isKindOfClass:tabNavigationClass]) {
-        return NO;
-    }
-    return list.bounds.size.height >= navigationController.view.bounds.size.height * 0.5;
-}
-
 static void ApplyWallpaperToController(UIViewController* controller) {
     if (!controller.isViewLoaded) {
         return;
@@ -3087,21 +2449,12 @@ static void ApplyWallpaperToController(UIViewController* controller) {
     if (!list) {
         return;
     }
-    if (FullOn) {
-        // The back shows through instead.
-        RemoveListWallpaper(list);
-        MakeListClear(list);
-        PrepareVisibleCells(list);
-    } else if (ControllerWantsWallpaper(controller, list)) {
-        ApplyListWallpaper(list);
-        PrepareVisibleCells(list);
-    } else {
-        RemoveListWallpaper(list);
-    }
+    MakeListClear(list);
+    PrepareVisibleCells(list);
 }
 
 static void ApplyBarWallpaperForController(UIViewController* controller) {
-    if (!BarsOn || !controller.isViewLoaded) {
+    if (!WallpaperOn || !controller.isViewLoaded) {
         return;
     }
     UINavigationBar* bar = controller.navigationController.navigationBar;
@@ -3113,11 +2466,6 @@ static void ApplyBarWallpaperForController(UIViewController* controller) {
 // MARK: - Switching
 
 static void RestoreEverything(void) {
-    for (UIScrollView* list in WeakSet(&WallpaperedListsStorage).allObjects) {
-        RemoveListWallpaper(list);
-    }
-    [WeakSet(&WallpaperedListsStorage) removeAllObjects];
-
     for (UIView* cell in WeakSet(&HostChangedCellsStorage).allObjects) {
         if ([cell respondsToSelector:@selector(setHostProvidesBackground:)]) {
             ((void (*)(id, SEL, BOOL))objc_msgSend)(cell, @selector(setHostProvidesBackground:), NO);
@@ -3134,16 +2482,12 @@ static void RestoreEverything(void) {
 
 static void ReadWallpaperOptions(void) {
     WallpaperOn = BHTWatermark.active;
-    FullOn = WallpaperOn && [BHTSettings boolForKey:kFullKey];
-    BarsOn = WallpaperOn && (FullOn || [BHTSettings boolForKey:kBarsKey]);
-    // Plates are mirrored, so they need the portal layer too.
-    PlatesOn = FullOn && [BHTSettings boolForKey:kPlatesKey] && PortalLayerClass() != nil;
-    PortalOn = BarsOn && ([BHTSettings boolForKey:kPortalKey] || PlatesOn) && PortalLayerClass() != nil;
+    PortalOn = WallpaperOn && PortalLayerClass() != nil;
 }
 
 // Everything the options ask for, applied over what's there.
 static void ReapplyWallpaper(void) {
-    UpdateSidebarFade(AppSplit);
+    ClearSidebarOverlays(AppSplit);
     if (!WallpaperOn) {
         return;
     }
@@ -3155,9 +2499,7 @@ static void ReapplyWallpaper(void) {
     for (UIViewController* tabBarController in WeakSet(&SeenTabBarControllersStorage).allObjects) {
         AttachTabBarWallpaper(tabBarController);
     }
-    if (FullOn) {
-        ClearAllScreens();
-    }
+    ClearAllScreens();
 }
 
 static void ApplyWallpaperChange(void) {
@@ -3215,8 +2557,7 @@ static UIView* TabBarHostHolding(UIView* view) {
 
 // One view X just painted in the theme color, handled as the full passes
 // would: a part of the picture in the header, the tab strips and short
-// translucent bars; clear elsewhere in "every screen" mode, and inside
-// cells of lists showing the picture.
+// translucent bars; clear elsewhere, inside cells too.
 static void ApplyToThemedView(UIView* view) {
     UIWindow* window = view.window;
     if (!window) {
@@ -3258,8 +2599,7 @@ static void ApplyToThemedView(UIView* view) {
             return;
         }
         // Inside a list that keeps its own color, nothing changes.
-        if (ancestor != view && IsList(ancestor) && !IsHostList((UIScrollView*)ancestor) &&
-            !ListHasWallpaper((UIScrollView*)ancestor)) {
+        if (ancestor != view && IsList(ancestor) && !IsHostList((UIScrollView*)ancestor)) {
             return;
         }
         if (IsTabStrip(ancestor)) {
@@ -3267,9 +2607,9 @@ static void ApplyToThemedView(UIView* view) {
             return;
         }
         if ([ancestor isKindOfClass:UINavigationBar.class]) {
-            if (NavigationBarWantsWallpaper((UINavigationBar*)ancestor) && CanPaint(view, 0.5) &&
-                FitsInBar(view, (UINavigationBar*)ancestor)) {
-                PaintPiece(view);
+            UINavigationBar* bar = (UINavigationBar*)ancestor;
+            if (NavigationBarWantsWallpaper(bar) && CanPaint(view, 0.5) && FitsInBar(view, bar)) {
+                PaintHeaderView(view, bar);
             }
             return;
         }
@@ -3279,13 +2619,13 @@ static void ApplyToThemedView(UIView* view) {
             while (list && !IsList(list)) {
                 list = list.superview;
             }
-            if (list && (IsHostList((UIScrollView*)list) || ListHasWallpaper((UIScrollView*)list))) {
+            if (list && IsHostList((UIScrollView*)list)) {
                 ClearThemeBackground(view);
             }
             return;
         }
     }
-    if (!FullOn) {
+    if (!WallpaperOn) {
         return;
     }
     if (IsList(view)) {
@@ -3329,7 +2669,7 @@ static void ProcessThemedViews(BOOL beforeDrawing) {
     ThemedViewsPending = NO;
     NSArray<UIView*>* views = WeakSet(&ThemedViewsStorage).allObjects;
     [WeakSet(&ThemedViewsStorage) removeAllObjects];
-    if (!BarsOn) {
+    if (!WallpaperOn) {
         return;
     }
     for (UIView* view in views) {
@@ -3418,7 +2758,6 @@ static void ProcessThemedViews(BOOL beforeDrawing) {
     CFRunLoopObserverRef observer = CFRunLoopObserverCreateWithHandler(
         kCFAllocatorDefault, kCFRunLoopBeforeWaiting | kCFRunLoopExit, true, 1999500,
         ^(CFRunLoopObserverRef runLoopObserver, CFRunLoopActivity activity) {
-            SettleTransitions();
             ProcessThemedViews(YES);
         });
     CFRunLoopAddObserver(CFRunLoopGetMain(), observer, kCFRunLoopCommonModes);

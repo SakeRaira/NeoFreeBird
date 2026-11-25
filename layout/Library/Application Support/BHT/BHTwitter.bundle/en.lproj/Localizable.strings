@@ -452,7 +452,7 @@
 "SIDEBAR_ITEMS_ON_TAB_BAR" = "On the navigation bar";
 "SIDEBAR_ITEMS_SHOW_ALL" = "Show all";
 "BACKGROUND_WATERMARK_TITLE" = "Wallpaper";
-"BACKGROUND_WATERMARK_DETAIL" = "Shows a picture you choose behind timelines, profiles, search results and other lists of posts. Posts and icons stay on top of it, and it stays in place while you scroll.";
+"BACKGROUND_WATERMARK_DETAIL" = "Shows a picture you choose behind every screen. Everything in the theme's background color becomes clear over it, and the header, tab strips and tab bar show it too, as one picture that stays in place while you scroll, switch tabs or move between screens. Screens open, close and swipe back with X's own animations.";
 "WATERMARK_IMAGE_TITLE" = "Picture";
 "WATERMARK_IMAGE_NONE" = "None";
 "WATERMARK_IMAGE_SET" = "Set";
@@ -462,14 +462,6 @@
 "WATERMARK_OPACITY_TITLE" = "Strength";
 "WATERMARK_OPACITY_MESSAGE" = "Higher shows more of the picture; lower stays closer to the theme's background color.";
 "WATERMARK_OPACITY_FORMAT" = "%ld%%";
-"BACKGROUND_WATERMARK_BARS_TITLE" = "Also behind header and tab bar";
-"BACKGROUND_WATERMARK_BARS_DETAIL" = "Shows the wallpaper behind the header at the top (with its tabs) and the tab bar at the bottom too, as one picture across the whole screen.";
-"BACKGROUND_WATERMARK_FULL_TITLE" = "Show on every screen";
-"BACKGROUND_WATERMARK_FULL_DETAIL" = "Makes everything painted in the theme's background color clear, showing the wallpaper at the very back. The header, the tab strips and the tab bar get the wallpaper too. When a screen opens or closes, the two screens cross-fade so they don't show through each other, and the sidebar fades in as it opens.";
-"BACKGROUND_WATERMARK_PORTAL_TITLE" = "Mirror the wallpaper (experimental)";
-"BACKGROUND_WATERMARK_PORTAL_DETAIL" = "Instead of cutting a piece of the picture for each header and tab strip, they show a live view of one wallpaper fixed to the screen, so the pieces stay lined up while screens slide or swipe. Turn this off to go back to the usual way.";
-"BACKGROUND_WATERMARK_PLATES_TITLE" = "Keep X's own transitions (experimental)";
-"BACKGROUND_WATERMARK_PLATES_DETAIL" = "With “Show on every screen” on, each screen, the sidebar and the main content get the wallpaper laid under them, so they cover each other as in the original app. Opening and closing screens, swiping back and the sidebar then move with X's own animations, without cross-fades, and the screen underneath fades toward the wallpaper where X would darken it. Uses the mirrored wallpaper even when that option is off.";
 "KEEP_TIMELINE_FILTERS_TITLE" = "Keep topic snoozes on";
 "KEEP_TIMELINE_FILTERS_DETAIL" = "Topics snoozed or filtered from the For You tab stay that way instead of switching off after 24 hours. Restart the app after changing this.";
 "HIDE_FOR_YOU_TAB_TITLE" = "Hide the For You tab";

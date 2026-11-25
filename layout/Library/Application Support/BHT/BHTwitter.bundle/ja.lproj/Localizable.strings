@@ -452,7 +452,7 @@
 "SIDEBAR_ITEMS_ON_TAB_BAR" = "ナビゲーションバーに表示中";
 "SIDEBAR_ITEMS_SHOW_ALL" = "すべて表示";
 "BACKGROUND_WATERMARK_TITLE" = "壁紙を設定";
-"BACKGROUND_WATERMARK_DETAIL" = "選んだ画像を、タイムラインやプロフィール、検索結果など投稿が並ぶ画面の背景に表示します。投稿やアイコンは画像の上に表示され、スクロールしても画像は動きません。";
+"BACKGROUND_WATERMARK_DETAIL" = "選んだ画像をすべての画面の背景に表示します。テーマの背景色で塗られた部分は透明になり、ヘッダやタブの切り替え、タブバーにも同じ1枚の画像が映ります。スクロールやタブの切り替え、画面の移動の間も画像は動きません。画面の開閉やスワイプで戻る操作は、Xのアニメーションのまま動きます。";
 "WATERMARK_IMAGE_TITLE" = "画像";
 "WATERMARK_IMAGE_NONE" = "未設定";
 "WATERMARK_IMAGE_SET" = "設定済み";
@@ -462,14 +462,6 @@
 "WATERMARK_OPACITY_TITLE" = "画像の濃さ";
 "WATERMARK_OPACITY_MESSAGE" = "数字が大きいほど画像がはっきり見え、小さいほどテーマの背景色に近くなります。";
 "WATERMARK_OPACITY_FORMAT" = "%ld%%";
-"BACKGROUND_WATERMARK_BARS_TITLE" = "ヘッダとタブバーにも表示";
-"BACKGROUND_WATERMARK_BARS_DETAIL" = "画面上部のヘッダ（タブの切り替えを含む）と下部のタブバーの背景にも壁紙を表示し、画面全体で1枚の画像としてつながるようにします。";
-"BACKGROUND_WATERMARK_FULL_TITLE" = "すべての画面に表示";
-"BACKGROUND_WATERMARK_FULL_DETAIL" = "テーマの背景色で塗られた部分をすべて透明にして、いちばん後ろの壁紙を見せます。ヘッダ、タブの切り替え、タブバーにも壁紙を表示します。画面を開いたり閉じたりするときは、前後の画面が重なって見えないようにクロスフェードします。サイドバーは開くにつれてフェードインします。";
-"BACKGROUND_WATERMARK_PORTAL_TITLE" = "壁紙をミラー表示（試験的）";
-"BACKGROUND_WATERMARK_PORTAL_DETAIL" = "ヘッダやタブの切り替えごとに画像を切り抜いて描く代わりに、画面に固定した1枚の壁紙をそのまま映します。画面のスライドやスワイプの途中でも位置がずれにくくなります。オフにすると従来の方式に戻ります。";
-"BACKGROUND_WATERMARK_PLATES_TITLE" = "Xの画面遷移をそのまま使う（試験的）";
-"BACKGROUND_WATERMARK_PLATES_DETAIL" = "「すべての画面に表示」がオンのとき、各画面とサイドバー、メインの画面の下に壁紙を敷いて、元のアプリと同じように画面どうしが重なるようにします。画面の開閉、スワイプで戻る操作、サイドバーは、クロスフェードを使わずXのアニメーションのまま動きます。後ろの画面は、Xが暗くするところで壁紙の色に薄くなります。「壁紙をミラー表示」がオフでもミラー表示を使います。";
 "KEEP_TIMELINE_FILTERS_TITLE" = "スヌーズを自動で解除しない";
 "KEEP_TIMELINE_FILTERS_DETAIL" = "おすすめタブでスヌーズ（絞り込み）したトピックが、24時間後に自動で解除されないようにします。変更後はアプリを再起動してください。";
 "HIDE_FOR_YOU_TAB_TITLE" = "おすすめタブを非表示";
