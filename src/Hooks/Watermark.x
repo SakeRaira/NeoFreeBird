@@ -565,11 +565,27 @@ static BOOL IsInsideSeeThroughPresentation(UIView* view) {
     return NO;
 }
 
-// What the picture is laid out against, the size of the window and anchored
-// at its top left: a sheet or modal's own view (it slides as one piece),
-// otherwise the nearest view directly under the root view or the window: one
-// back behind the sidebar, the main content and the tab bar.
+// What the picture is laid out against: the window itself, so the wallpaper
+// stays put whatever moves or shifts in between (a screen sliding, a header
+// rearranging itself, a container X offsets); a sheet or modal carries its
+// own as it slides up, laid out against its own view.
 static UIView* AlignmentReference(UIView* view) {
+    UIWindow* window = view.window;
+    if (!window) {
+        return nil;
+    }
+    UIViewController* presented = PresentedRootOf(view);
+    UIView* presentedView = presented.viewIfLoaded;
+    if (presentedView && presentedView.window == window && !IsInsideSeeThroughPresentation(view)) {
+        return presentedView;
+    }
+    return window;
+}
+
+// The view the wallpaper's back is painted at the bottom of: a sheet or
+// modal's own view, otherwise the nearest view directly under the root view
+// or the window, behind the sidebar, the main content and the tab bar.
+static UIView* BackViewFor(UIView* view) {
     UIWindow* window = view.window;
     if (!window) {
         return nil;
@@ -863,6 +879,29 @@ static void RealignPieces(UIWindow* window) {
     }
 }
 
+// A transition is over (done or cancelled): what was held still for the
+// slide is let go, and every part is lined up for where things are now, and
+// again once X has finished putting the header and the screens back (a
+// cancelled swipe puts them back after reporting its end).
+static void SettlePiecesAfterTransition(UIWindow* window) {
+    if (!BarsOn || ![window isKindOfClass:UIWindow.class]) {
+        return;
+    }
+    for (UIView* view in WeakSet(&PiecesStorage).allObjects) {
+        if (view.window == window) {
+            [PieceLayer(view, NO).sublayers.firstObject removeAnimationForKey:@"BHTHoldStill"];
+        }
+    }
+    RealignPieces(window);
+    __weak UIWindow* weakWindow = window;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        RealignPieces(weakWindow);
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        RealignPieces(weakWindow);
+    });
+}
+
 static void RemovePieces(void) {
     for (UIView* view in WeakSet(&PiecesStorage).allObjects) {
         [PieceLayer(view, NO) removeFromSuperlayer];
@@ -1027,7 +1066,7 @@ static void PrepareVisibleCells(UIScrollView* list) {
 // The back a view shows through to: a part of the picture painted at the
 // bottom of its alignment reference.
 static void EnsureBack(UIView* view) {
-    UIView* back = AlignmentReference(view);
+    UIView* back = BackViewFor(view);
     if (back && back != view.window && ![back isKindOfClass:UIScrollView.class] &&
         !IsInsideSeeThroughPresentation(back)) {
         objc_setAssociatedObject(back, PlateKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1949,6 +1988,7 @@ static void EndNavigationFades(UINavigationController* navigationController) {
 - (void)_tfn_transitionAnimationCompletedIsCanceled:(BOOL)canceled isPush:(BOOL)push {
     %orig;
     EndNavigationFades((UINavigationController*)self);
+    SettlePiecesAfterTransition(((UINavigationController*)self).viewIfLoaded.window);
 }
 
 // X snapshots a screen's header items to show while the header changes over
@@ -2170,8 +2210,8 @@ static void RemoveAddedOverlays(id animator) {
 
 // The slide moving `view`: the position animation on it or the nearest
 // view holding it, as a change relative to where it ends up.
-static CABasicAnimation* SlideAnimationFor(UIView* view, UIView* container, CGPoint* fromOffset, CGPoint* toOffset) {
-    for (UIView* mover = view; mover && mover != container.superview; mover = mover.superview) {
+static CABasicAnimation* SlideAnimationFor(UIView* view, CGPoint* fromOffset, CGPoint* toOffset) {
+    for (UIView* mover = view; mover && ![mover isKindOfClass:UIWindow.class]; mover = mover.superview) {
         CAAnimation* animation = [mover.layer animationForKey:@"position"];
         if ([animation isKindOfClass:CABasicAnimation.class]) {
             CABasicAnimation* slide = (CABasicAnimation*)animation;
@@ -2212,13 +2252,15 @@ static CABasicAnimation* SlideAnimationFor(UIView* view, UIView* container, CGPo
     return nil;
 }
 
+// Every part in the window is looked at, not only those in the screens:
+// the header of a screen (a profile's, holding its bio) slides with it too.
 static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> transition) {
-    UIView* container = transition.containerView;
-    if (!container) {
+    UIWindow* window = transition.containerView.window;
+    if (!window) {
         return;
     }
     for (UIView* view in WeakSet(&PiecesStorage).allObjects) {
-        if (![view isDescendantOfView:container]) {
+        if (view.window != window) {
             continue;
         }
         CALayer* picture = PieceLayer(view, NO).sublayers.firstObject;
@@ -2227,7 +2269,7 @@ static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> 
         }
         CGPoint fromOffset = CGPointZero;
         CGPoint toOffset = CGPointZero;
-        CABasicAnimation* slide = SlideAnimationFor(view, container, &fromOffset, &toOffset);
+        CABasicAnimation* slide = SlideAnimationFor(view, &fromOffset, &toOffset);
         if (!slide || (fromOffset.x == toOffset.x && fromOffset.y == toOffset.y)) {
             continue;
         }
@@ -2279,9 +2321,7 @@ static void HoldPiecesStillDuringSlide(id<UIViewControllerContextTransitioning> 
     // where they are (a cancelled swipe puts them back).
     UIWindow* window = [objc_getAssociatedObject(self, TransitionWindowKey) nonretainedObjectValue];
     objc_setAssociatedObject(self, TransitionWindowKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    if (BarsOn && [window isKindOfClass:UIWindow.class]) {
-        RealignPieces(window);
-    }
+    SettlePiecesAfterTransition(window);
 }
 
 - (double)_tfn_maximumAlphaForTransition:(id)transition {
