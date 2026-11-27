@@ -337,6 +337,12 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"default": @YES,
                         @"type": @"toggle"
                     },
+                    // Opens Shadowban Checker F for the profile (ShadowbanCheck.x).
+                    @{
+                        @"key": @"shadowban_check_button",
+                        @"default": @YES,
+                        @"type": @"toggle"
+                    },
                     @{
                         @"key": @"hide_tweet_button_on_profiles",
                         @"default": @YES,
