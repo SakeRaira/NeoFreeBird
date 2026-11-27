@@ -28,6 +28,7 @@
 // Show button would (FeatureSwitches.m). A warning is never added.
 
 BOOL BHTViewModelShowsRetweetOfUnflaggedPost(id viewModel);
+NSInteger BHTViewModelRetweetState(id viewModel);
 
 static BOOL JudgeRetweetsByOriginal(void) {
     return [BHTSettings boolForKey:@"sensitive_by_original_post"];
@@ -146,24 +147,45 @@ BOOL BHTHidesSensitiveWarningFor(id model) {
 // A media overlay's post: the view model of the status view it's in (a
 // cell's own, found through the cell; a quoted post's status view inside it
 // is its own post and keeps its warnings).
-BOOL BHTOverlayShowsRetweetOfUnmarkedPost(UIView* overlay) {
-    if (!JudgeRetweetsByOriginal()) {
-        return NO;
-    }
+static id OverlayStatusViewModel(UIView* overlay) {
     UIView* view = overlay.superview;
     for (NSUInteger depth = 0; view && depth < 24; depth++, view = view.superview) {
         id statusView = BHTSafeObject(view, @selector(statusView));
         if ([statusView isKindOfClass:UIView.class] && [overlay isDescendantOfView:statusView]) {
-            return IsRetweetOfUnmarkedPost(BHTSafeObject(statusView, @selector(viewModel)));
+            return BHTSafeObject(statusView, @selector(viewModel));
         }
         if ([NSStringFromClass(view.class) hasSuffix:@"StatusView"]) {
             id viewModel = BHTSafeObject(view, @selector(viewModel));
             if (viewModel) {
-                return IsRetweetOfUnmarkedPost(viewModel);
+                return viewModel;
             }
         }
     }
-    return NO;
+    return nil;
+}
+
+BOOL BHTOverlayShowsRetweetOfUnmarkedPost(UIView* overlay) {
+    return JudgeRetweetsByOriginal() && IsRetweetOfUnmarkedPost(OverlayStatusViewModel(overlay));
+}
+
+// What the debug label on a blurred overlay says (the highlight's debug
+// option): why it was or wasn't opened.
+NSString* BHTSensitiveOverlayDebugText(UIView* overlay, BOOL ageVerificationRequired, BOOL hasRevealButton) {
+    id viewModel = OverlayStatusViewModel(overlay);
+    NSString* post = @"post: not found";
+    if (viewModel) {
+        BOOL wasReading = ReadingOwnMarks;
+        ReadingOwnMarks = YES;
+        NSInteger state = BHTViewModelRetweetState(viewModel);
+        ReadingOwnMarks = wasReading;
+        post = state == 2 ? @"RT: original clean" : state == 1 ? @"RT: original marked" : @"post: not a RT";
+    }
+    return [NSString stringWithFormat:@"%@\nhide warnings: %@ / RT option: %@\nage check: %@ / button: %@\nmodel: %@",
+                                      post, BHTSensitiveWarningsSuppressed() ? @"on" : @"off",
+                                      JudgeRetweetsByOriginal() ? @"on" : @"off",
+                                      ageVerificationRequired ? @"REQUIRED" : @"no",
+                                      hasRevealButton ? @"found" : @"MISSING",
+                                      viewModel ? NSStringFromClass([viewModel class]) : @"-"];
 }
 
 %hook T1TwitterCoreStatusViewModelAdapter

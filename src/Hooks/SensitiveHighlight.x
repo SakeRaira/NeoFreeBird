@@ -273,6 +273,15 @@ BOOL BHTViewModelShowsRetweetOfUnflaggedPost(id viewModel) {
     return !AuthorIsMarked(objects);
 }
 
+// For the overlay's debug label: 0 not a retweet (or no post found), 1 a
+// retweet whose original is marked, 2 a retweet whose original is clean.
+NSInteger BHTViewModelRetweetState(id viewModel) {
+    if (!viewModel || !RetweetedOriginal(ObjectsLinkedFrom(viewModel))) {
+        return 0;
+    }
+    return BHTViewModelShowsRetweetOfUnflaggedPost(viewModel) ? 2 : 1;
+}
+
 // Several categories can apply at once; the most severe one picks the color.
 static BHTSensitiveVerdict VerdictForFlags(BHTSensitiveFlags flags) {
     if (!(flags & BHTSensitiveFlagged)) {

@@ -392,11 +392,13 @@ static __thread NSUInteger NFBLiquidGlassInstallationDepth;
     %orig;
     BHTUpdateSensitiveMediaRevealButton(self);
     BHTScheduleSensitiveMediaReveal(self);
+    BHTUpdateSensitiveOverlayDebug(self);
 }
 
 - (void)layoutSubviews {
     %orig;
     BHTUpdateSensitiveMediaRevealButton(self);
+    BHTUpdateSensitiveOverlayDebug(self);
 }
 
 - (void)setBlurViewIsHidden:(BOOL)hidden {
