@@ -288,6 +288,8 @@ static NSArray* SubheadersWithActionButtonsFirst(NSArray* subheaders) {
     return [reordered copy];
 }
 
+static NSArray* SubheadersWithUserIDRow(UIViewController* profile, UIViewController* header, id subheaders);
+
 // MARK: - Compose button on profiles
 
 // The floating compose button belongs to the tab navigation and stays on
@@ -423,9 +425,10 @@ static void ApplyProfileComposeButtonVisibilityEverywhere(void) {
 
 - (id)resizableHeaderSubheaderViewControllersForResizableHeaderViewController:(id)controller {
     id subheaders = %orig;
-    return [BHTSettings boolForKey:@"profile_buttons_under_username"]
-               ? SubheadersWithActionButtonsFirst(subheaders)
-               : subheaders;
+    if ([BHTSettings boolForKey:@"profile_buttons_under_username"]) {
+        subheaders = SubheadersWithActionButtonsFirst(subheaders);
+    }
+    return SubheadersWithUserIDRow((UIViewController*)self, controller, subheaders);
 }
 
 - (id)segmentedViewController:(id)controller descriptorAtIndex:(long long)index {
@@ -458,115 +461,201 @@ static void ApplyProfileComposeButtonVisibilityEverywhere(void) {
 // MARK: - User ID under the username
 
 // The account's numeric ID (the one that stays when the @username changes)
-// on a line of its own under the @username, in the same font and color. The
-// summary view lays out the name, the @username and the rest from fixed
-// slots in -_t1_layoutElements:atPosition:forSizingOnly:, so the line is a
-// label of its own placed after X's layout: right under the @username, with
-// what sits below it moved down a line and the height grown to match. Only
-// the position showing the @username gets it (the collapsed header shows
-// the post count there instead).
+// on a line of its own right under the @username, in the same font and
+// color. The profile header stacks the rows under the name and @username
+// (the buttons, the bio, ...) in the order of the list the profile hands it
+// on every layout; each row is a view controller the header added through
+// -addSubheaderViewController:..., which also gives it its spacing. So the ID
+// is a row of its own, added once (outside the layout asking for the list)
+// and put first in that list.
 
-static const void* UserIDLabelsKey = &UserIDLabelsKey;
-static const void* UserIDShiftedFrameKey = &UserIDShiftedFrameKey;
-static const CGFloat kUserIDLineSpacing = 2;
+static const void* UserIDRowKey = &UserIDRowKey;
+static const void* UserIDRowAddingKey = &UserIDRowAddingKey;
+static const CGFloat kUserIDRowBottomSpacing = 4;
 
 static BOOL ShowsUserID(void) {
     return [BHTSettings boolForKey:@"profile_show_user_id"];
 }
 
-static UILabel* UsernameLabelIn(NSArray* elements, NSString* username) {
-    if (![elements isKindOfClass:NSArray.class] || username.length == 0) {
+static UIView* ProfileSummaryViewIn(UIView* root) {
+    Class summaryClass = objc_getClass("T1ProfileSummaryView");
+    if (!summaryClass || !root) {
         return nil;
     }
-    NSString* handle = [@"@" stringByAppendingString:username];
-    for (id element in elements) {
-        if ([element isKindOfClass:UILabel.class] &&
-            [((UILabel*)element).text compare:handle options:NSCaseInsensitiveSearch] == NSOrderedSame) {
-            return element;
+    NSMutableArray<UIView*>* queue = [NSMutableArray arrayWithObject:root];
+    for (NSUInteger i = 0; i < queue.count && i < 300; i++) {
+        if ([queue[i] isKindOfClass:summaryClass]) {
+            return queue[i];
         }
+        [queue addObjectsFromArray:queue[i].subviews];
     }
     return nil;
 }
 
-static UILabel* UserIDLabel(UIView* summary, unsigned long long position, BOOL create) {
-    NSMutableDictionary<NSNumber*, UILabel*>* labels = objc_getAssociatedObject(summary, UserIDLabelsKey);
-    UILabel* label = labels[@(position)];
-    if (label || !create) {
-        return label;
-    }
-    if (!labels) {
-        labels = [NSMutableDictionary dictionary];
-        objc_setAssociatedObject(summary, UserIDLabelsKey, labels, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    label = [UILabel new];
-    label.numberOfLines = 1;
-    label.backgroundColor = UIColor.clearColor;
-    labels[@(position)] = label;
-    [summary addSubview:label];
-    return label;
+// "@name" as shown, without the direction marks X may wrap it in.
+static NSString* PlainHandle(NSString* text) {
+    static NSCharacterSet* marks;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        marks = [NSCharacterSet characterSetWithCharactersInString:
+                                    @"‎‏‪‫‬‭‮⁦⁧⁨⁩"];
+    });
+    return [[text componentsSeparatedByCharactersInSet:marks] componentsJoinedByString:@""];
 }
 
-// Moves a view down a line once per frame X gives it: a frame still where
-// it was moved to last time was left alone by X and stays.
-static void MoveDownForUserID(UIView* view, CGFloat distance) {
-    NSValue* shifted = objc_getAssociatedObject(view, UserIDShiftedFrameKey);
-    if (shifted && CGRectEqualToRect(shifted.CGRectValue, view.frame)) {
+// The @username's label in the summary: X's own accessor when it holds the
+// @username, otherwise whichever label in the summary does.
+static UILabel* ProfileUsernameLabel(UIView* summary) {
+    NSString* username = BHTSafeString(BHTSafeObject(summary, @selector(userDataSource)), @selector(username));
+    if (username.length == 0) {
+        return nil;
+    }
+    NSString* handle = [@"@" stringByAppendingString:username];
+    BOOL (^isHandle)(id) = ^BOOL(id label) {
+        return [label isKindOfClass:UILabel.class] &&
+               [PlainHandle(((UILabel*)label).text) compare:handle options:NSCaseInsensitiveSearch] == NSOrderedSame;
+    };
+    id accessor = BHTSafeObject(summary, @selector(miniProfileTransitionSubtitleLabel));
+    if (isHandle(accessor)) {
+        return accessor;
+    }
+    NSMutableArray<UIView*>* queue = [summary.subviews mutableCopy];
+    for (NSUInteger i = 0; i < queue.count && i < 120; i++) {
+        if (isHandle(queue[i])) {
+            return (UILabel*)queue[i];
+        }
+        [queue addObjectsFromArray:queue[i].subviews];
+    }
+    return nil;
+}
+
+@interface BHTProfileUserIDRow : UIViewController
+@property (nonatomic, strong) id subheaderInfo;
+@property (nonatomic, copy) id preferredHeightCheckBlock;
+@property (nonatomic, weak) UIViewController* headerController;
+@property (nonatomic, strong) UILabel* label;
+@end
+
+@implementation BHTProfileUserIDRow
+
+- (void)loadView {
+    UIView* view = [[UIView alloc] init];
+    view.backgroundColor = UIColor.clearColor;
+    view.clipsToBounds = YES;
+    self.label = [[UILabel alloc] init];
+    self.label.numberOfLines = 1;
+    self.label.backgroundColor = UIColor.clearColor;
+    [view addSubview:self.label];
+    self.view = view;
+}
+
+- (UIView*)bht_summaryView {
+    UIViewController* header = self.headerController;
+    UIView* headerView = BHTSafeObject(header, @selector(headerView));
+    return ProfileSummaryViewIn(headerView ?: header.viewIfLoaded);
+}
+
+- (UIFont*)bht_font {
+    UIFont* font = ProfileUsernameLabel([self bht_summaryView]).font;
+    return font ?: [UIFont systemFontOfSize:15];
+}
+
+// T1ResizableHeaderSubheader.
+- (double)preferredHeight {
+    return ceil([self bht_font].lineHeight) + kUserIDRowBottomSpacing;
+}
+
+- (BOOL)wantsPreferredHeightAppliedAsIs {
+    return YES;
+}
+
+// Sent to some kinds of rows as they're added.
+- (void)setInsetsIgnoreSafeArea:(BOOL)ignore {
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    [self bht_update];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self bht_update];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    [self bht_update];
+}
+
+- (void)bht_update {
+    if (!self.isViewLoaded) {
         return;
     }
-    view.frame = CGRectOffset(view.frame, 0, distance);
-    objc_setAssociatedObject(view, UserIDShiftedFrameKey, [NSValue valueWithCGRect:view.frame],
-                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    UIView* summary = [self bht_summaryView];
+    UILabel* username = ProfileUsernameLabel(summary);
+    long long userID = BHTSafeLongLong(BHTSafeObject(summary, @selector(userDataSource)), @selector(userID));
+    self.label.font = username.font ?: [UIFont systemFontOfSize:15];
+    self.label.textColor = username.textColor ?: UIColor.secondaryLabelColor;
+    self.label.text = userID > 0 ? [NSString stringWithFormat:@"ID: %lld", userID] : nil;
+    self.label.accessibilityLabel = self.label.text;
+
+    // Lined up with the @username.
+    CGFloat x = 16;
+    if (username.window && username.window == self.view.window) {
+        x = MAX(0, [username convertRect:username.bounds toView:self.view].origin.x);
+    }
+    CGFloat lineHeight = ceil(self.label.font.lineHeight);
+    self.label.frame = CGRectMake(x, 0, MAX(0, CGRectGetWidth(self.view.bounds) - x - 16), lineHeight);
 }
 
-%hook T1ProfileSummaryView
+@end
 
-- (double)_t1_layoutElements:(NSArray*)elements atPosition:(unsigned long long)position forSizingOnly:(BOOL)sizingOnly {
-    double height = %orig;
-    UIView* summary = (UIView*)self;
-    id dataSource = BHTSafeObject(self, @selector(userDataSource));
-    long long userID = BHTSafeLongLong(dataSource, @selector(userID));
-    UILabel* username = UsernameLabelIn(elements, BHTSafeString(dataSource, @selector(username)));
-    UILabel* existing = UserIDLabel(summary, position, NO);
-    if (!ShowsUserID() || !username || username.hidden || userID <= 0) {
-        if (!sizingOnly) {
-            existing.hidden = YES;
+static NSArray* SubheadersWithUserIDRow(UIViewController* profile, UIViewController* header, id subheaders) {
+    BHTProfileUserIDRow* row = objc_getAssociatedObject(profile, UserIDRowKey);
+    if (!ShowsUserID() || ![subheaders isKindOfClass:NSArray.class] || ![header isKindOfClass:UIViewController.class]) {
+        if (row.parentViewController && !objc_getAssociatedObject(row, UserIDRowAddingKey)) {
+            objc_setAssociatedObject(row, UserIDRowAddingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            UIViewController* parent = row.parentViewController;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                SEL remove = @selector(removeSubheaderViewController:animated:completion:);
+                if (row.parentViewController == parent && [parent respondsToSelector:remove]) {
+                    ((void (*)(id, SEL, id, BOOL, id))objc_msgSend)(parent, remove, row, NO, nil);
+                }
+                objc_setAssociatedObject(row, UserIDRowAddingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            });
         }
-        return height;
+        return subheaders;
     }
 
-    UIFont* font = username.font;
-    CGFloat lineHeight = ceil(font.lineHeight);
-    CGFloat added = lineHeight + kUserIDLineSpacing;
-    if (sizingOnly) {
-        return height + added;
+    if (!row) {
+        row = [[BHTProfileUserIDRow alloc] init];
+        objc_setAssociatedObject(profile, UserIDRowKey, row, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
+    row.headerController = header;
 
-    UILabel* label = existing ?: UserIDLabel(summary, position, YES);
-    CGFloat usernameBottom = CGRectGetMaxY(username.frame);
-    for (id element in elements) {
-        if (![element isKindOfClass:UIView.class] || element == username || element == label ||
-            ((UIView*)element).hidden || ((UIView*)element).superview != summary) {
-            continue;
+    if (row.parentViewController != header) {
+        // Added after the layout that's asking, which then lays it out again.
+        if (!objc_getAssociatedObject(row, UserIDRowAddingKey)) {
+            objc_setAssociatedObject(row, UserIDRowAddingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            __weak UIViewController* weakHeader = header;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                UIViewController* strongHeader = weakHeader;
+                SEL add = @selector(addSubheaderViewController:topSpacing:bottomSpacing:animated:options:completion:);
+                if (strongHeader && ShowsUserID() && row.parentViewController != strongHeader &&
+                    [strongHeader respondsToSelector:add]) {
+                    ((void (*)(id, SEL, id, double, double, BOOL, unsigned long long, id))objc_msgSend)(
+                        strongHeader, add, row, 0, 0, NO, 0, nil);
+                    [strongHeader.viewIfLoaded setNeedsLayout];
+                }
+                objc_setAssociatedObject(row, UserIDRowAddingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            });
         }
-        // What starts below the @username's line (not what shares the line).
-        if (CGRectGetMinY(((UIView*)element).frame) >= usernameBottom - 0.5) {
-            MoveDownForUserID(element, added);
-        }
+        return subheaders;
     }
 
-    label.font = font;
-    label.textColor = username.textColor;
-    label.text = [NSString stringWithFormat:@"ID: %lld", userID];
-    label.accessibilityLabel = label.text;
-    CGFloat x = CGRectGetMinX(username.frame);
-    label.frame = CGRectMake(x, usernameBottom + kUserIDLineSpacing,
-                             MAX(0, CGRectGetWidth(summary.bounds) - x - 16), lineHeight);
-    label.alpha = username.alpha;
-    label.hidden = NO;
-    if (label.superview != summary) {
-        [summary addSubview:label];
-    }
-    return height + added;
+    NSMutableArray* list = [(NSArray*)subheaders mutableCopy];
+    [list removeObjectIdenticalTo:row];
+    [list insertObject:row atIndex:0];
+    return list;
 }
-
-%end
