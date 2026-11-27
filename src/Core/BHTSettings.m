@@ -337,6 +337,12 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"default": @YES,
                         @"type": @"toggle"
                     },
+                    // Red avatar rings and the ••• menu's status (Shadowban.x).
+                    @{
+                        @"key": @"shadowban_scanner",
+                        @"default": @YES,
+                        @"type": @"toggle"
+                    },
                     @{
                         @"key": @"hide_tweet_button_on_profiles",
                         @"default": @YES,
