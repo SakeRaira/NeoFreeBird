@@ -446,6 +446,8 @@
 "PROFILE_MEDIA_PHOTOS_FIRST_DETAIL" = "Opens the Media tab on profiles with photos instead of videos.";
 "PROFILE_BUTTONS_UNDER_USERNAME_TITLE" = "Buttons under the username";
 "PROFILE_BUTTONS_UNDER_USERNAME_DETAIL" = "Moves the Message and Follow buttons on profiles from above the tabs to right under the @username.";
+"PROFILE_SHOW_USER_ID_TITLE" = "User ID under the username";
+"PROFILE_SHOW_USER_ID_DETAIL" = "Shows the account's numeric ID, which stays the same when the @username changes, on its own line under the @username on profiles.";
 "HIDE_TWEET_BUTTON_ON_PROFILES_TITLE" = "Hide Tweet button on profiles";
 "HIDE_TWEET_BUTTON_ON_PROFILES_DETAIL" = "Hides the floating compose button in the corner while someone else's profile is open. It stays on your own.";
 "SIDEBAR_ITEMS_TITLE" = "Edit sidebar";

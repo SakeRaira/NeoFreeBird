@@ -446,6 +446,8 @@
 "PROFILE_MEDIA_PHOTOS_FIRST_DETAIL" = "プロフィールのメディア欄を開いたときに、動画ではなく画像を最初に表示します。";
 "PROFILE_BUTTONS_UNDER_USERNAME_TITLE" = "ボタンをユーザー名の下に表示";
 "PROFILE_BUTTONS_UNDER_USERNAME_DETAIL" = "プロフィールのメッセージ・フォローボタンを、タブの上から@ユーザー名のすぐ下に移動します。";
+"PROFILE_SHOW_USER_ID_TITLE" = "ユーザー名の下にIDを表示";
+"PROFILE_SHOW_USER_ID_DETAIL" = "プロフィールの@ユーザー名の下に、ユーザー名を変えても変わらない数字のIDを表示します。";
 "HIDE_TWEET_BUTTON_ON_PROFILES_TITLE" = "プロフィールでツイートボタンを非表示";
 "HIDE_TWEET_BUTTON_ON_PROFILES_DETAIL" = "ほかのアカウントの画面を開いている間、右下のツイート作成ボタンを非表示にします。自分のアカウントの画面では表示されたままです。";
 "SIDEBAR_ITEMS_TITLE" = "サイドバーを編集";

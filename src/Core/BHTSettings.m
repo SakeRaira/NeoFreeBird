@@ -331,6 +331,12 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"default": @YES,
                         @"type": @"toggle"
                     },
+                    // The numeric ID under the @username (Profile.x).
+                    @{
+                        @"key": @"profile_show_user_id",
+                        @"default": @YES,
+                        @"type": @"toggle"
+                    },
                     @{
                         @"key": @"hide_tweet_button_on_profiles",
                         @"default": @YES,

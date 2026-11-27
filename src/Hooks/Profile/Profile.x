@@ -454,3 +454,119 @@ static void ApplyProfileComposeButtonVisibilityEverywhere(void) {
 }
 
 %end
+
+// MARK: - User ID under the username
+
+// The account's numeric ID (the one that stays when the @username changes)
+// on a line of its own under the @username, in the same font and color. The
+// summary view lays out the name, the @username and the rest from fixed
+// slots in -_t1_layoutElements:atPosition:forSizingOnly:, so the line is a
+// label of its own placed after X's layout: right under the @username, with
+// what sits below it moved down a line and the height grown to match. Only
+// the position showing the @username gets it (the collapsed header shows
+// the post count there instead).
+
+static const void* UserIDLabelsKey = &UserIDLabelsKey;
+static const void* UserIDShiftedFrameKey = &UserIDShiftedFrameKey;
+static const CGFloat kUserIDLineSpacing = 2;
+
+static BOOL ShowsUserID(void) {
+    return [BHTSettings boolForKey:@"profile_show_user_id"];
+}
+
+static UILabel* UsernameLabelIn(NSArray* elements, NSString* username) {
+    if (![elements isKindOfClass:NSArray.class] || username.length == 0) {
+        return nil;
+    }
+    NSString* handle = [@"@" stringByAppendingString:username];
+    for (id element in elements) {
+        if ([element isKindOfClass:UILabel.class] &&
+            [((UILabel*)element).text compare:handle options:NSCaseInsensitiveSearch] == NSOrderedSame) {
+            return element;
+        }
+    }
+    return nil;
+}
+
+static UILabel* UserIDLabel(UIView* summary, unsigned long long position, BOOL create) {
+    NSMutableDictionary<NSNumber*, UILabel*>* labels = objc_getAssociatedObject(summary, UserIDLabelsKey);
+    UILabel* label = labels[@(position)];
+    if (label || !create) {
+        return label;
+    }
+    if (!labels) {
+        labels = [NSMutableDictionary dictionary];
+        objc_setAssociatedObject(summary, UserIDLabelsKey, labels, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    label = [UILabel new];
+    label.numberOfLines = 1;
+    label.backgroundColor = UIColor.clearColor;
+    labels[@(position)] = label;
+    [summary addSubview:label];
+    return label;
+}
+
+// Moves a view down a line once per frame X gives it: a frame still where
+// it was moved to last time was left alone by X and stays.
+static void MoveDownForUserID(UIView* view, CGFloat distance) {
+    NSValue* shifted = objc_getAssociatedObject(view, UserIDShiftedFrameKey);
+    if (shifted && CGRectEqualToRect(shifted.CGRectValue, view.frame)) {
+        return;
+    }
+    view.frame = CGRectOffset(view.frame, 0, distance);
+    objc_setAssociatedObject(view, UserIDShiftedFrameKey, [NSValue valueWithCGRect:view.frame],
+                             OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+%hook T1ProfileSummaryView
+
+- (double)_t1_layoutElements:(NSArray*)elements atPosition:(unsigned long long)position forSizingOnly:(BOOL)sizingOnly {
+    double height = %orig;
+    UIView* summary = (UIView*)self;
+    id dataSource = BHTSafeObject(self, @selector(userDataSource));
+    long long userID = BHTSafeLongLong(dataSource, @selector(userID));
+    UILabel* username = UsernameLabelIn(elements, BHTSafeString(dataSource, @selector(username)));
+    UILabel* existing = UserIDLabel(summary, position, NO);
+    if (!ShowsUserID() || !username || username.hidden || userID <= 0) {
+        if (!sizingOnly) {
+            existing.hidden = YES;
+        }
+        return height;
+    }
+
+    UIFont* font = username.font;
+    CGFloat lineHeight = ceil(font.lineHeight);
+    CGFloat added = lineHeight + kUserIDLineSpacing;
+    if (sizingOnly) {
+        return height + added;
+    }
+
+    UILabel* label = existing ?: UserIDLabel(summary, position, YES);
+    CGFloat usernameBottom = CGRectGetMaxY(username.frame);
+    for (id element in elements) {
+        if (![element isKindOfClass:UIView.class] || element == username || element == label ||
+            ((UIView*)element).hidden || ((UIView*)element).superview != summary) {
+            continue;
+        }
+        // What starts below the @username's line (not what shares the line).
+        if (CGRectGetMinY(((UIView*)element).frame) >= usernameBottom - 0.5) {
+            MoveDownForUserID(element, added);
+        }
+    }
+
+    label.font = font;
+    label.textColor = username.textColor;
+    label.text = [NSString stringWithFormat:@"ID: %lld", userID];
+    label.accessibilityLabel = label.text;
+    CGFloat x = CGRectGetMinX(username.frame);
+    label.frame = CGRectMake(x, usernameBottom + kUserIDLineSpacing,
+                             MAX(0, CGRectGetWidth(summary.bounds) - x - 16), lineHeight);
+    label.alpha = username.alpha;
+    label.hidden = NO;
+    if (label.superview != summary) {
+        [summary addSubview:label];
+    }
+    return height + added;
+}
+
+%end
