@@ -15,10 +15,93 @@
 // drew the "may contain sensitive content, change settings" tombstone where
 // the opened post showed the media.
 
+// MARK: - Retweets judged by the original post
+
+// X gives a retweet the warning of the account that retweeted it (an account
+// X considers sensitive has the mark on everything it posts, retweets
+// included), even over a post that carries no mark of its own. With "Judge
+// retweets by the original post" on, a retweet whose original has no
+// sensitive mark (its own flag, its author's, or its author's account) gets
+// no warning either. A warning is never added.
+
+static BOOL JudgeRetweetsByOriginal(void) {
+    return [BHTSettings boolForKey:@"sensitive_by_original_post"];
+}
+
+// The post a model shows: the TFNTwitterStatus itself, or the one a view
+// model wraps, up to three deep.
+static id StatusBehind(id model) {
+    Class statusClass = objc_getClass("TFNTwitterStatus");
+    for (NSUInteger depth = 0; model && statusClass && depth < 4; depth++) {
+        if ([model isKindOfClass:statusClass]) {
+            return model;
+        }
+        id inner = nil;
+        for (NSString* name in @[@"tweet", @"status", @"statusViewModel"]) {
+            inner = BHTSafeObject(model, NSSelectorFromString(name));
+            if (inner && inner != model) {
+                break;
+            }
+            inner = nil;
+        }
+        model = inner;
+    }
+    return nil;
+}
+
+static BOOL PostHasSensitiveMark(id post) {
+    if (BHTSafeBool(post, @selector(isPossiblySensitive)) ||
+        BHTSafeBool(post, @selector(hasSensitiveMediaWarningsFlaggedByAuthor))) {
+        return YES;
+    }
+    // The author's account (a profile interstitial of any kind).
+    id author = BHTSafeObject(post, @selector(fromUser));
+    return BHTSafeLongLong(author, @selector(profileInterstitialType)) != 0;
+}
+
+// For a retweet, the post it shares (as a TFNTwitterStatus), else nil. The
+// model answers whether it's a retweet itself where it can: a view model
+// says so, and points to the original through representedStatus.
+static id RetweetedOriginalOf(id model) {
+    for (NSUInteger depth = 0; model && depth < 4; depth++) {
+        if ([model respondsToSelector:@selector(isRetweet)]) {
+            if (!BHTSafeBool(model, @selector(isRetweet))) {
+                return nil;
+            }
+            id original = BHTSafeObject(model, @selector(retweetedStatus))
+                              ?: BHTSafeObject(model, @selector(representedStatus));
+            return original && original != model ? StatusBehind(original) : nil;
+        }
+        id inner = nil;
+        for (NSString* name in @[@"statusViewModel", @"tweet", @"status"]) {
+            inner = BHTSafeObject(model, NSSelectorFromString(name));
+            if (inner && inner != model) {
+                break;
+            }
+            inner = nil;
+        }
+        model = inner;
+    }
+    return nil;
+}
+
+// Only judged with the original post in hand: anything else keeps X's answer.
+static BOOL IsRetweetOfUnmarkedPost(id model) {
+    if (!JudgeRetweetsByOriginal()) {
+        return NO;
+    }
+    id original = RetweetedOriginalOf(model);
+    return original && !PostHasSensitiveMark(original);
+}
+
+BOOL BHTHidesSensitiveWarningFor(id model) {
+    return BHTSensitiveWarningsSuppressed() || IsRetweetOfUnmarkedPost(model);
+}
+
 %hook T1TwitterCoreStatusViewModelAdapter
 
 - (BOOL)isPossiblySensitiveViewModelForAccount:(id)account {
-    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? NO : %orig;
 }
 
 - (BOOL)displaySensitiveContentAppealForAccount:(id)account {
@@ -26,15 +109,15 @@
 }
 
 - (BOOL)hasImageInterstitial {
-    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? NO : %orig;
 }
 
 - (id)imageInterstitial {
-    return BHTSensitiveWarningsSuppressed() ? nil : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? nil : %orig;
 }
 
 - (id)innerImageInterstitial {
-    return BHTSensitiveWarningsSuppressed() ? nil : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? nil : %orig;
 }
 
 %end
@@ -42,7 +125,7 @@
 %hook T1TranslatedStatusViewModel
 
 - (BOOL)isPossiblySensitiveViewModelForAccount:(id)account {
-    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? NO : %orig;
 }
 
 - (BOOL)displaySensitiveContentAppealForAccount:(id)account {
@@ -50,15 +133,15 @@
 }
 
 - (BOOL)hasImageInterstitial {
-    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? NO : %orig;
 }
 
 - (id)imageInterstitial {
-    return BHTSensitiveWarningsSuppressed() ? nil : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? nil : %orig;
 }
 
 - (id)innerImageInterstitial {
-    return BHTSensitiveWarningsSuppressed() ? nil : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? nil : %orig;
 }
 
 %end
@@ -67,7 +150,7 @@
 %hook _TtC10TwitterURT30URTTimelineStatusItemViewModel
 
 - (BOOL)isPossiblySensitiveViewModelForAccount:(id)account {
-    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? NO : %orig;
 }
 
 - (BOOL)displaySensitiveContentAppealForAccount:(id)account {
@@ -75,7 +158,7 @@
 }
 
 - (BOOL)hasImageInterstitial {
-    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? NO : %orig;
 }
 
 %end
@@ -85,7 +168,7 @@
 %hook TTAStatusViewCombinedViewModel
 
 - (BOOL)isPossiblySensitive {
-    return BHTSensitiveWarningsSuppressed() ? NO : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? NO : %orig;
 }
 
 %end

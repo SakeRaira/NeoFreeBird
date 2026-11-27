@@ -14,3 +14,6 @@ NSHashTable* DashContentControllers(void);
 UIButton* BHTSensitiveMediaRevealButton(HFSensitiveTweetBlurredInterstitialView* overlay);
 void BHTUpdateSensitiveMediaRevealButton(HFSensitiveTweetBlurredInterstitialView* overlay);
 void BHTScheduleSensitiveMediaReveal(HFSensitiveTweetBlurredInterstitialView* overlay);
+// Warnings off altogether, or `model` a retweet judged by its original
+// post ("Judge retweets by the original post").
+BOOL BHTHidesSensitiveWarningFor(id model);

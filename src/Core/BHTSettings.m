@@ -450,6 +450,13 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                         @"prefKeyForSubtitle": @"sensitive_zones_summary",
                         @"subtitleDefaultKey": @"GENERIC_OFF_LABEL"
                     },
+                    // A retweet's warning comes from the post it shares, not
+                    // from who retweeted it (SensitiveWarnings.x).
+                    @{
+                        @"key": @"sensitive_by_original_post",
+                        @"default": @YES,
+                        @"type": @"toggle"
+                    },
                     @{
                         @"key": @"highlight_sensitive_tweets",
                         @"default": @YES,

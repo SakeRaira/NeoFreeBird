@@ -349,27 +349,25 @@ static __thread NSUInteger NFBLiquidGlassInstallationDepth;
 %hook TFNTwitterStatus
 
 - (BOOL)hasImageInterstitial {
-    return BHTSensitiveWarningsSuppressed()
-               ? NO
-               : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? NO : %orig;
 }
 
 - (id)imageInterstitial {
-    return BHTSensitiveWarningsSuppressed()
-               ? nil
-               : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? nil : %orig;
 }
 
 - (id)innerImageInterstitial {
-    return BHTSensitiveWarningsSuppressed()
-               ? nil
-               : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? nil : %orig;
 }
 
 - (BOOL)isPossiblySensitiveViewModelForAccount:(id)account {
-    return BHTSensitiveWarningsSuppressed()
-               ? NO
-               : %orig;
+    return BHTHidesSensitiveWarningFor(self) ? NO : %orig;
+}
+
+// The raw flag, for a retweet judged by its original only: with warnings
+// simply off, what X flagged stays readable (the highlight uses it).
+- (BOOL)isPossiblySensitive {
+    return !BHTSensitiveWarningsSuppressed() && BHTHidesSensitiveWarningFor(self) ? NO : %orig;
 }
 
 - (BOOL)displaySensitiveContentAppealForAccount:(id)account {

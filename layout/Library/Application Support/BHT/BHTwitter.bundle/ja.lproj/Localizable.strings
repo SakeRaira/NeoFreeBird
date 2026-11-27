@@ -399,6 +399,8 @@
 "BLOCK_X_LOCATION_DETAIL" = "アプリを開いている間にXが現在地を繰り返し取得し、検索や投稿への自動の位置情報付与などに使うのを止めます。近くの検索結果や、投稿への位置情報の追加は使えなくなります。「警告を表示する場所」はそのまま使えます。変更後はアプリを再起動してください。";
 "HIGHLIGHT_SENSITIVE_TWEETS_TITLE" = "センシティブなツイートをハイライト";
 "HIGHLIGHT_SENSITIVE_TWEETS_DETAIL" = "センシティブ判定が付いているツイートの背景を内容の種類で色分けします。ピンク: 成人向け、紫: 暴力的、オレンジ: その他、赤: 種類不明。";
+"SENSITIVE_BY_ORIGINAL_POST_TITLE" = "リツイートは元の投稿で判定";
+"SENSITIVE_BY_ORIGINAL_POST_DETAIL" = "リツイートにセンシティブ警告を付けるかどうかを、リツイートしたアカウントではなく、元の投稿（投稿自体、投稿者、投稿者のアカウント）にセンシティブ判定が付いているかで決めます。";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_TITLE" = "センシティブハイライトのデバッグ表示";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "各ツイートの左端に判定結果の色を表示します。赤: センシティブ、緑: 通常、黄: ツイートの情報を取得できない。";
 "SENSITIVE_ZONES_TITLE" = "警告を表示する場所";

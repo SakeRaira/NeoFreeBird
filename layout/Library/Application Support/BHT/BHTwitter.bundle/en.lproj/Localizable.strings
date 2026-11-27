@@ -399,6 +399,8 @@
 "BLOCK_X_LOCATION_DETAIL" = "Stops X from fetching where you are while it's open, which it otherwise does over and over for search, automatic location tags and more. Results near you and adding a location to posts stop working. \"Show warnings at places\" keeps working. Restart the app after changing this.";
 "HIGHLIGHT_SENSITIVE_TWEETS_TITLE" = "Highlight sensitive Tweets";
 "HIGHLIGHT_SENSITIVE_TWEETS_DETAIL" = "Tints Tweets marked as possibly sensitive by the kind of content: pink for adult content, purple for graphic violence, orange for other, red when unspecified.";
+"SENSITIVE_BY_ORIGINAL_POST_TITLE" = "Judge retweets by the original post";
+"SENSITIVE_BY_ORIGINAL_POST_DETAIL" = "A retweet only gets a sensitive content warning when the post it shares is marked sensitive (by itself, its author or the author's account), not because the account that retweeted it is.";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_TITLE" = "Debug sensitive Tweet highlight";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "Shows a strip on the left edge of each Tweet: red for sensitive, green for not sensitive, yellow when the Tweet couldn't be inspected.";
 "SENSITIVE_ZONES_TITLE" = "Show warnings at places";
