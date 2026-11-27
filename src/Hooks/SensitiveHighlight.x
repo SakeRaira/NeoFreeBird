@@ -224,18 +224,7 @@ static id RetweetedOriginal(NSArray* objects) {
 // sends with it ("Content warning: Adult content", "... labeled by X"),
 // which can come without any of the flags above. It has no category of its
 // own, so the kind is read from its title where it says one.
-static BHTSensitiveFlags FlagsForInterstitial(id object) {
-    id interstitial = ObjectForSelectorIfResponds(object, @selector(imageInterstitial));
-    BOOL present = BoolForSelectorIfResponds(object, @selector(hasImageInterstitial));
-    if (interstitial) {
-        char returnType = ReturnTypeForSelector(interstitial, @selector(hasImageInterstitial));
-        present = present || !ReturnTypeIsBool(returnType) ||
-                  BoolForSelectorIfResponds(interstitial, @selector(hasImageInterstitial));
-    }
-    if (!present) {
-        return 0;
-    }
-
+static BHTSensitiveFlags FlagsForInterstitialObject(id interstitial) {
     BHTSensitiveFlags flags = BHTSensitiveFlagged;
     id title = ObjectForSelectorIfResponds(interstitial, @selector(title));
     NSString* text = [title isKindOfClass:NSString.class] ? title : ObjectForSelectorIfResponds(title, @selector(text));
@@ -251,10 +240,23 @@ static BHTSensitiveFlags FlagsForInterstitial(id object) {
     return flags;
 }
 
-// The post's own model (a TFNTwitterStatus), which carries the warning the
-// server sent with that very post. A view model around a retweet's original
-// may answer with the warning laid over the retweet instead (the
-// retweeter's), so for an original only its own model's warning counts.
+// An interstitial object that says it's empty doesn't count.
+static BOOL InterstitialIsPresent(id interstitial) {
+    char returnType = ReturnTypeForSelector(interstitial, @selector(hasImageInterstitial));
+    return interstitial && (!ReturnTypeIsBool(returnType) ||
+                            BoolForSelectorIfResponds(interstitial, @selector(hasImageInterstitial)));
+}
+
+static BHTSensitiveFlags FlagsForInterstitial(id object) {
+    id interstitial = ObjectForSelectorIfResponds(object, @selector(imageInterstitial));
+    BOOL present = BoolForSelectorIfResponds(object, @selector(hasImageInterstitial)) || InterstitialIsPresent(interstitial);
+    return present ? FlagsForInterstitialObject(interstitial) : 0;
+}
+
+// The post's own model (a TFNTwitterStatus), which holds the warning over
+// its media. A view model around a retweet's original may answer with the
+// warning laid over the retweet instead (the retweeter's), so for an
+// original only its own model's warning is read, and only when it's its own.
 static BOOL IsPostModel(id object) {
     static Class statusClass;
     static dispatch_once_t onceToken;
@@ -264,11 +266,40 @@ static BOOL IsPostModel(id object) {
     return statusClass && [object isKindOfClass:statusClass];
 }
 
+// That warning when it's the post's own. Building a retweet
+// (-[TFNTwitterStatus initWithStatusBundle:]), X gives the original the
+// retweet's warning, the very same object (put there for the retweeter's
+// account on everything it posts), and replaces it only with a warning the
+// original came with. An original holding its retweet's warning has none of
+// its own. Read from the ivars, past the warning hooks.
+static id OwnInterstitial(id post) {
+    if (!IsPostModel(post)) {
+        return nil;
+    }
+    id interstitial = objectIvar(post, "_imageInterstitial");
+    if (!InterstitialIsPresent(interstitial)) {
+        return nil;
+    }
+    id retweet = ObjectForSelectorIfResponds(post, @selector(retweetingStatus));
+    if (retweet && retweet != post && objectIvar(retweet, "_imageInterstitial") == interstitial) {
+        return nil;
+    }
+    return interstitial;
+}
+
+BOOL BHTPostHasOwnInterstitial(id post) {
+    return OwnInterstitial(post) != nil;
+}
+
+static BHTSensitiveFlags FlagsForOwnInterstitial(id post) {
+    id interstitial = OwnInterstitial(post);
+    return interstitial ? FlagsForInterstitialObject(interstitial) : 0;
+}
+
 // Flags of the post a cell shows: for a retweet only the retweeted original
-// and what it links to, X's warning over its media included as far as the
-// original's own model carries it; otherwise everything the view model
-// links to, X's warning included. Read as X says it, with warnings hidden or
-// not.
+// and what it links to, X's warning over its media included when it's the
+// original's own; otherwise everything the view model links to, X's warning
+// included. Read as X says it, with warnings hidden or not.
 static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
     BOOL wasReading = BHTReadingRawSensitivity;
     BHTReadingRawSensitivity = YES;
@@ -278,12 +309,20 @@ static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
         objects = ObjectsLinkedFrom(original);
     }
 
+    // A post a retweet carries (X links it back to the retweet) is an
+    // original too.
+    BOOL throughRetweet = original != nil;
+    for (id object in objects) {
+        if (throughRetweet) {
+            break;
+        }
+        throughRetweet = IsPostModel(object) && ObjectForSelectorIfResponds(object, @selector(retweetingStatus));
+    }
+
     BHTSensitiveFlags flags = 0;
     for (id object in objects) {
         flags |= FlagsForObject(object);
-        if (!original || IsPostModel(object)) {
-            flags |= FlagsForInterstitial(object);
-        }
+        flags |= throughRetweet ? FlagsForOwnInterstitial(object) : FlagsForInterstitial(object);
     }
     BHTReadingRawSensitivity = wasReading;
     return flags;
@@ -307,8 +346,8 @@ static BOOL AuthorIsMarked(NSArray* objects) {
 // For "Judge retweets by the original post" (SensitiveWarnings.x): the post
 // a view model shows is a retweet, found the way the highlight finds it, and
 // the retweeted original carries no mark of its own (its flags, its media's
-// labels, the warning the server sent with it, its author's account). Read
-// as X says it.
+// labels, a warning over its media that's its own, its author's account).
+// Read as X says it.
 BOOL BHTViewModelShowsRetweetOfUnflaggedPost(id viewModel) {
     if (!viewModel) {
         return NO;
@@ -324,7 +363,7 @@ BOOL BHTViewModelShowsRetweetOfUnflaggedPost(id viewModel) {
             if (!clean) {
                 break;
             }
-            if (FlagsForObject(object) || (IsPostModel(object) && FlagsForInterstitial(object))) {
+            if (FlagsForObject(object) || FlagsForOwnInterstitial(object)) {
                 clean = NO;
             }
         }

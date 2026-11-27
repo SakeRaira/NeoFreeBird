@@ -20,14 +20,16 @@
 // X gives a retweet the warning of the account that retweeted it (an account
 // X considers sensitive has the mark on everything it posts, retweets
 // included), even over a post that carries no mark of its own. The mark can
-// sit on the retweet or reach the original it shows, and the media's overlay
-// is decided from either. With "Judge retweets by the original post" on, a
+// sit on the retweet or reach the original it shows (X copies the retweet's
+// warning over the media onto an original that came without one), and the
+// media's overlay is decided from either. With "Judge retweets by the original post" on, a
 // post shown through a retweet whose original has no sensitive mark (its own
 // flag, its media's, or its author's flag or account) gets no warning: the
 // checks below answer no, and an overlay drawn anyway is opened the way the
 // Show button would (FeatureSwitches.m). A warning is never added.
 
 BOOL BHTViewModelShowsRetweetOfUnflaggedPost(id viewModel);
+BOOL BHTPostHasOwnInterstitial(id post);
 
 static BOOL JudgeRetweetsByOriginal(void) {
     return [BHTSettings boolForKey:@"sensitive_by_original_post"];
@@ -88,16 +90,16 @@ static BOOL MediaHasWarning(id post) {
     return NO;
 }
 
-// The caller holds ReadingOwnMarks. The warning the server sent with the
-// post (its image interstitial) counts too, read as X says it.
+// The caller holds ReadingOwnMarks. A warning over its media counts when
+// it's the post's own, not its retweet's that X copies onto it
+// (SensitiveHighlight.x). Read as X says it.
 static BOOL PostHasSensitiveMark(id post) {
     BOOL wasReading = BHTReadingRawSensitivity;
     BHTReadingRawSensitivity = YES;
     id author = BHTSafeObject(post, @selector(fromUser));
     BOOL marked = BHTSafeBool(post, @selector(isPossiblySensitive)) ||
                   BHTSafeBool(post, @selector(hasSensitiveMediaWarningsFlaggedByAuthor)) || MediaHasWarning(post) ||
-                  BHTSafeBool(post, @selector(hasImageInterstitial)) ||
-                  BHTSafeObject(post, @selector(imageInterstitial)) != nil ||
+                  BHTPostHasOwnInterstitial(post) ||
                   BHTIsSensitiveMediaInterstitialType(BHTSafeLongLong(author, @selector(profileInterstitialType)));
     BHTReadingRawSensitivity = wasReading;
     return marked;
