@@ -236,15 +236,14 @@ static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
     return flags;
 }
 
-// The author of any of `objects` with a profile interstitial (an account X
-// marks as sensitive, among others).
+// The author of any of `objects` with X's sensitive-media profile warning.
 static BOOL AuthorIsMarked(NSArray* objects) {
     SEL typeSelector = @selector(profileInterstitialType);
     for (id object in objects) {
         id author = ObjectForSelectorIfResponds(object, @selector(fromUser));
         char returnType = ReturnTypeForSelector(author, typeSelector);
         if (returnType == 'q' || returnType == 'l' || returnType == 'i') {
-            if (((long long (*)(id, SEL))objc_msgSend)(author, typeSelector) != 0) {
+            if (BHTIsSensitiveMediaInterstitialType(((long long (*)(id, SEL))objc_msgSend)(author, typeSelector))) {
                 return YES;
             }
         }

@@ -7,8 +7,9 @@
 //  (outside the purple ring of a Space it's in), and the details from a
 //  profile's ••• menu. Only what the app already gets with the account is
 //  used; nothing is fetched.
-//   - Profile interstitial: X shows a warning before the profile (sensitive
-//     media and the like). Rings the avatar.
+//   - Profile interstitial of the sensitive-media kind: X shows a warning
+//     before the profile. Rings the avatar. (Ordinary accounts carry a value
+//     here too; only the kinds X's profile treats as sensitive media count.)
 //   - Withheld in countries. Rings the avatar.
 //   - Graduated access: in the details only (an account missing the field
 //     can't be told from one held back).
@@ -35,7 +36,8 @@ static NSArray<NSString*>* WithheldCountriesOf(id user) {
 }
 
 static BOOL UserIsRestricted(id user) {
-    return user && (InterstitialTypeOf(user) != 0 || WithheldCountriesOf(user).count > 0);
+    return user &&
+           (BHTIsSensitiveMediaInterstitialType(InterstitialTypeOf(user)) || WithheldCountriesOf(user).count > 0);
 }
 
 // MARK: - The ring
@@ -206,9 +208,10 @@ static NSString* ShadowbanStatusText(id user) {
 
     long long interstitial = InterstitialTypeOf(user);
     NSString* interstitialText =
-        interstitial != 0 ? [NSString stringWithFormat:ShadowbanString(@"SHADOWBAN_STATUS_KIND_FORMAT"),
-                                                       ShadowbanString(@"SHADOWBAN_STATUS_YES"), interstitial]
-                          : ShadowbanString(@"SHADOWBAN_STATUS_NO");
+        BHTIsSensitiveMediaInterstitialType(interstitial)
+            ? [NSString stringWithFormat:ShadowbanString(@"SHADOWBAN_STATUS_KIND_FORMAT"),
+                                         ShadowbanString(@"SHADOWBAN_STATUS_YES"), interstitial]
+            : ShadowbanString(@"SHADOWBAN_STATUS_NO");
     [lines addObject:[NSString stringWithFormat:@"%@: %@", ShadowbanString(@"SHADOWBAN_STATUS_PROFILE_MEDIA"),
                                                 interstitialText]];
 

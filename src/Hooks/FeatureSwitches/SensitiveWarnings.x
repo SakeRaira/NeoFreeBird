@@ -94,7 +94,7 @@ static BOOL PostHasSensitiveMark(id post) {
     id author = BHTSafeObject(post, @selector(fromUser));
     return BHTSafeBool(post, @selector(isPossiblySensitive)) ||
            BHTSafeBool(post, @selector(hasSensitiveMediaWarningsFlaggedByAuthor)) || MediaHasWarning(post) ||
-           BHTSafeLongLong(author, @selector(profileInterstitialType)) != 0;
+           BHTIsSensitiveMediaInterstitialType(BHTSafeLongLong(author, @selector(profileInterstitialType)));
 }
 
 // The original post a model shows through a retweet (a TFNTwitterStatus),
