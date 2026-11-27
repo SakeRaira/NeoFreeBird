@@ -146,42 +146,6 @@ static void BHTRevealSensitiveMedia(HFSensitiveTweetBlurredInterstitialView* ove
     BHTUpdateSensitiveMediaRevealButton(overlay);
 }
 
-static char SensitiveOverlayDebugLabelKey;
-
-void BHTUpdateSensitiveOverlayDebug(HFSensitiveTweetBlurredInterstitialView* overlay) {
-    UILabel* label = objc_getAssociatedObject(overlay, &SensitiveOverlayDebugLabelKey);
-    if (![BHTSettings boolForKey:@"highlight_sensitive_tweets_debug"] || !overlay.window) {
-        label.hidden = YES;
-        return;
-    }
-    if (!label) {
-        label = [[UILabel alloc] init];
-        label.numberOfLines = 0;
-        label.font = [UIFont monospacedSystemFontOfSize:10 weight:UIFontWeightMedium];
-        label.textColor = UIColor.systemYellowColor;
-        label.backgroundColor = [UIColor colorWithWhite:0 alpha:0.75];
-        label.userInteractionEnabled = NO;
-        objc_setAssociatedObject(overlay, &SensitiveOverlayDebugLabelKey, label, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-
-    BOOL ageVerificationRequired = NO;
-    id<BHTSensitiveMediaOverlayDelegate> delegate = overlay.delegate;
-    if ([delegate respondsToSelector:@selector(blurViewRequiresAgeVerificationToRevealWithBlurView:)]) {
-        ageVerificationRequired = [delegate blurViewRequiresAgeVerificationToRevealWithBlurView:overlay];
-    }
-    label.text = BHTSensitiveOverlayDebugText(overlay, ageVerificationRequired,
-                                              BHTSensitiveMediaRevealButton(overlay) != nil);
-    if (label.superview != overlay) {
-        [overlay addSubview:label];
-    } else if (overlay.subviews.lastObject != label) {
-        [overlay bringSubviewToFront:label];
-    }
-    CGFloat width = MAX(0, overlay.bounds.size.width - 16);
-    CGSize size = [label sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
-    label.frame = CGRectMake(8, 8, MIN(size.width, width), size.height);
-    label.hidden = NO;
-}
-
 void BHTScheduleSensitiveMediaReveal(HFSensitiveTweetBlurredInterstitialView* overlay) {
     if (!overlay.window || !OverlayWarningHidden(overlay) ||
         objc_getAssociatedObject(overlay, &SensitiveMediaRevealPendingKey)) {

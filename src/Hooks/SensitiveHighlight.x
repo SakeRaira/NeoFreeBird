@@ -272,15 +272,6 @@ BOOL BHTViewModelShowsRetweetOfUnflaggedPost(id viewModel) {
     return !AuthorIsMarked(objects);
 }
 
-// For the overlay's debug label: 0 not a retweet (or no post found), 1 a
-// retweet whose original is marked, 2 a retweet whose original is clean.
-NSInteger BHTViewModelRetweetState(id viewModel) {
-    if (!viewModel || !RetweetedOriginal(ObjectsLinkedFrom(viewModel))) {
-        return 0;
-    }
-    return BHTViewModelShowsRetweetOfUnflaggedPost(viewModel) ? 2 : 1;
-}
-
 // Several categories can apply at once; the most severe one picks the color.
 static BHTSensitiveVerdict VerdictForFlags(BHTSensitiveFlags flags) {
     if (!(flags & BHTSensitiveFlagged)) {
@@ -449,32 +440,6 @@ static void UpdateDebugMarker(T1StatusCell* cell, BOOL show, BHTSensitiveVerdict
     marker.hidden = NO;
 }
 
-static const void* RetweetDebugMarkerKey = &RetweetDebugMarkerKey;
-
-// Debug aid for "Judge retweets by the original post": a blue strip on the
-// trailing edge of a retweet whose original was found and judged clean.
-static void UpdateRetweetDebugMarker(T1StatusCell* cell, BOOL show, id viewModel) {
-    UIView* marker = objc_getAssociatedObject(cell, RetweetDebugMarkerKey);
-    if (!show || !BHTViewModelShowsRetweetOfUnflaggedPost(viewModel)) {
-        marker.hidden = YES;
-        return;
-    }
-    if (!marker) {
-        marker = [[UIView alloc] init];
-        marker.userInteractionEnabled = NO;
-        marker.backgroundColor = UIColor.systemBlueColor;
-        objc_setAssociatedObject(cell, RetweetDebugMarkerKey, marker, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    UIView* container = cell.contentView;
-    if (marker.superview != container) {
-        [container addSubview:marker];
-    } else if (container.subviews.lastObject != marker) {
-        [container bringSubviewToFront:marker];
-    }
-    marker.frame = CGRectMake(container.bounds.size.width - 6, 0, 6, container.bounds.size.height);
-    marker.hidden = NO;
-}
-
 static void UpdateSensitiveHighlight(T1StatusCell* cell) {
     if (!cell) {
         return;
@@ -490,7 +455,6 @@ static void UpdateSensitiveHighlight(T1StatusCell* cell) {
 
     UpdateHighlightLayer(cell, statusView, enabled ? HighlightColorForVerdict(verdict) : nil);
     UpdateDebugMarker(cell, debug, verdict);
-    UpdateRetweetDebugMarker(cell, debug, debug ? ObjectForSelectorIfResponds(statusView, @selector(viewModel)) : nil);
 }
 
 // Quoted tweets bring status views of their own inside the cell; only the

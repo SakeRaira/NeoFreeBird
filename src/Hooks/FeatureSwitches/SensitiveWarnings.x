@@ -28,7 +28,6 @@
 // Show button would (FeatureSwitches.m). A warning is never added.
 
 BOOL BHTViewModelShowsRetweetOfUnflaggedPost(id viewModel);
-NSInteger BHTViewModelRetweetState(id viewModel);
 
 static BOOL JudgeRetweetsByOriginal(void) {
     return [BHTSettings boolForKey:@"sensitive_by_original_post"];
@@ -166,26 +165,6 @@ static id OverlayStatusViewModel(UIView* overlay) {
 
 BOOL BHTOverlayShowsRetweetOfUnmarkedPost(UIView* overlay) {
     return JudgeRetweetsByOriginal() && IsRetweetOfUnmarkedPost(OverlayStatusViewModel(overlay));
-}
-
-// What the debug label on a blurred overlay says (the highlight's debug
-// option): why it was or wasn't opened.
-NSString* BHTSensitiveOverlayDebugText(UIView* overlay, BOOL ageVerificationRequired, BOOL hasRevealButton) {
-    id viewModel = OverlayStatusViewModel(overlay);
-    NSString* post = @"post: not found";
-    if (viewModel) {
-        BOOL wasReading = ReadingOwnMarks;
-        ReadingOwnMarks = YES;
-        NSInteger state = BHTViewModelRetweetState(viewModel);
-        ReadingOwnMarks = wasReading;
-        post = state == 2 ? @"RT: original clean" : state == 1 ? @"RT: original marked" : @"post: not a RT";
-    }
-    return [NSString stringWithFormat:@"%@\nhide warnings: %@ / RT option: %@\nage check: %@ / button: %@\nmodel: %@",
-                                      post, BHTSensitiveWarningsSuppressed() ? @"on" : @"off",
-                                      JudgeRetweetsByOriginal() ? @"on" : @"off",
-                                      ageVerificationRequired ? @"REQUIRED" : @"no",
-                                      hasRevealButton ? @"found" : @"MISSING",
-                                      viewModel ? NSStringFromClass([viewModel class]) : @"-"];
 }
 
 %hook T1TwitterCoreStatusViewModelAdapter
