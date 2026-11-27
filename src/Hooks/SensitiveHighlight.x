@@ -251,11 +251,24 @@ static BHTSensitiveFlags FlagsForInterstitial(id object) {
     return flags;
 }
 
+// The post's own model (a TFNTwitterStatus), which carries the warning the
+// server sent with that very post. A view model around a retweet's original
+// may answer with the warning laid over the retweet instead (the
+// retweeter's), so for an original only its own model's warning counts.
+static BOOL IsPostModel(id object) {
+    static Class statusClass;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        statusClass = objc_getClass("TFNTwitterStatus");
+    });
+    return statusClass && [object isKindOfClass:statusClass];
+}
+
 // Flags of the post a cell shows: for a retweet only the retweeted original
-// and what it links to (its own marks: X may lay the retweeter's warning over
-// it, which says nothing about the post), otherwise everything the view model
-// links to, X's warning over the media included. Read as X says it, with
-// warnings hidden or not.
+// and what it links to, X's warning over its media included as far as the
+// original's own model carries it; otherwise everything the view model
+// links to, X's warning included. Read as X says it, with warnings hidden or
+// not.
 static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
     BOOL wasReading = BHTReadingRawSensitivity;
     BHTReadingRawSensitivity = YES;
@@ -268,7 +281,7 @@ static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
     BHTSensitiveFlags flags = 0;
     for (id object in objects) {
         flags |= FlagsForObject(object);
-        if (!original) {
+        if (!original || IsPostModel(object)) {
             flags |= FlagsForInterstitial(object);
         }
     }
@@ -294,22 +307,30 @@ static BOOL AuthorIsMarked(NSArray* objects) {
 // For "Judge retweets by the original post" (SensitiveWarnings.x): the post
 // a view model shows is a retweet, found the way the highlight finds it, and
 // the retweeted original carries no mark of its own (its flags, its media's
-// labels, its author's account).
+// labels, the warning the server sent with it, its author's account). Read
+// as X says it.
 BOOL BHTViewModelShowsRetweetOfUnflaggedPost(id viewModel) {
     if (!viewModel) {
         return NO;
     }
+    BOOL wasReading = BHTReadingRawSensitivity;
+    BHTReadingRawSensitivity = YES;
+    BOOL clean = NO;
     id original = RetweetedOriginal(ObjectsLinkedFrom(viewModel));
-    if (!original) {
-        return NO;
-    }
-    NSArray* objects = ObjectsLinkedFrom(original);
-    for (id object in objects) {
-        if (FlagsForObject(object)) {
-            return NO;
+    if (original) {
+        NSArray* objects = ObjectsLinkedFrom(original);
+        clean = !AuthorIsMarked(objects);
+        for (id object in objects) {
+            if (!clean) {
+                break;
+            }
+            if (FlagsForObject(object) || (IsPostModel(object) && FlagsForInterstitial(object))) {
+                clean = NO;
+            }
         }
     }
-    return !AuthorIsMarked(objects);
+    BHTReadingRawSensitivity = wasReading;
+    return clean;
 }
 
 // Several categories can apply at once; the most severe one picks the color.

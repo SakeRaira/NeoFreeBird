@@ -88,12 +88,19 @@ static BOOL MediaHasWarning(id post) {
     return NO;
 }
 
-// The caller holds ReadingOwnMarks.
+// The caller holds ReadingOwnMarks. The warning the server sent with the
+// post (its image interstitial) counts too, read as X says it.
 static BOOL PostHasSensitiveMark(id post) {
+    BOOL wasReading = BHTReadingRawSensitivity;
+    BHTReadingRawSensitivity = YES;
     id author = BHTSafeObject(post, @selector(fromUser));
-    return BHTSafeBool(post, @selector(isPossiblySensitive)) ||
-           BHTSafeBool(post, @selector(hasSensitiveMediaWarningsFlaggedByAuthor)) || MediaHasWarning(post) ||
-           BHTIsSensitiveMediaInterstitialType(BHTSafeLongLong(author, @selector(profileInterstitialType)));
+    BOOL marked = BHTSafeBool(post, @selector(isPossiblySensitive)) ||
+                  BHTSafeBool(post, @selector(hasSensitiveMediaWarningsFlaggedByAuthor)) || MediaHasWarning(post) ||
+                  BHTSafeBool(post, @selector(hasImageInterstitial)) ||
+                  BHTSafeObject(post, @selector(imageInterstitial)) != nil ||
+                  BHTIsSensitiveMediaInterstitialType(BHTSafeLongLong(author, @selector(profileInterstitialType)));
+    BHTReadingRawSensitivity = wasReading;
+    return marked;
 }
 
 // The original post a model shows through a retweet (a TFNTwitterStatus),
