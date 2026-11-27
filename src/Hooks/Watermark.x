@@ -527,8 +527,7 @@ static UIViewController* PresentedRootOf(UIView* view) {
 // media viewer, whose background fades to show that screen as the picture is
 // dragged away). It gets no back and nothing in it is made clear, so it
 // shows the screen behind it the way X means it to.
-static BOOL IsInsideSeeThroughPresentation(UIView* view) {
-    UIViewController* presented = PresentedRootOf(view);
+static BOOL IsSeeThroughPresentation(UIViewController* presented) {
     if (!presented) {
         return NO;
     }
@@ -543,6 +542,31 @@ static BOOL IsInsideSeeThroughPresentation(UIView* view) {
     return NO;
 }
 
+// A screen opened on top of the first one inside the modal (a profile
+// opened from the media viewer through the poster's picture): it covers
+// what's behind it like any other screen, so it's treated like one.
+static BOOL IsInScreenOpenedInside(UIView* view, UIViewController* presented) {
+    UIView* root = presented.viewIfLoaded;
+    for (UIView* ancestor = view; ancestor && ancestor != root; ancestor = ancestor.superview) {
+        UIResponder* responder = ancestor.nextResponder;
+        if (![responder isKindOfClass:UIViewController.class]) {
+            continue;
+        }
+        UIViewController* controller = (UIViewController*)responder;
+        UINavigationController* navigation = (UINavigationController*)controller.parentViewController;
+        if (controller.viewIfLoaded == ancestor && [navigation isKindOfClass:UINavigationController.class] &&
+            navigation.viewControllers.firstObject != controller) {
+            return YES;
+        }
+    }
+    return NO;
+}
+
+static BOOL IsInsideSeeThroughPresentation(UIView* view) {
+    UIViewController* presented = PresentedRootOf(view);
+    return IsSeeThroughPresentation(presented) && !IsInScreenOpenedInside(view, presented);
+}
+
 // What the picture is laid out against: the window itself, so the wallpaper
 // stays put whatever moves or shifts in between (a screen sliding, a header
 // rearranging itself, a container X offsets); a sheet or modal carries its
@@ -552,9 +576,11 @@ static UIView* AlignmentReference(UIView* view) {
     if (!window) {
         return nil;
     }
+    // A see-through modal covers the window without moving, screens opened
+    // inside it included: laid out against the window, they're mirrored.
     UIViewController* presented = PresentedRootOf(view);
     UIView* presentedView = presented.viewIfLoaded;
-    if (presentedView && presentedView.window == window && !IsInsideSeeThroughPresentation(view)) {
+    if (presentedView && presentedView.window == window && !IsSeeThroughPresentation(presented)) {
         return presentedView;
     }
     return window;
