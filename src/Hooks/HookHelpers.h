@@ -107,6 +107,10 @@ NSString* BHTSafeString(id object, SEL selector);
 // (-[T1ProfileDisplayInterstitialedUserContentProvider
 // private_isSensitiveMediaInterstitialType:]). Ordinary accounts have a
 // value too (0 only when none was received), so non-zero says nothing.
+// Set while the sensitive highlight reads what X itself says about a post:
+// the warning hooks then answer as X would, warnings hidden or not.
+extern __thread BOOL BHTReadingRawSensitivity;
+
 static inline BOOL BHTIsSensitiveMediaInterstitialType(long long type) {
     return (type & ~1LL) == 4;
 }

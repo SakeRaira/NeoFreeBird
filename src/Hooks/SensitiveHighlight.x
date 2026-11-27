@@ -220,9 +220,45 @@ static id RetweetedOriginal(NSArray* objects) {
     return nil;
 }
 
+// X's own warning laid over a post's media: the interstitial the server
+// sends with it ("Content warning: Adult content", "... labeled by X"),
+// which can come without any of the flags above. It has no category of its
+// own, so the kind is read from its title where it says one.
+static BHTSensitiveFlags FlagsForInterstitial(id object) {
+    id interstitial = ObjectForSelectorIfResponds(object, @selector(imageInterstitial));
+    BOOL present = BoolForSelectorIfResponds(object, @selector(hasImageInterstitial));
+    if (interstitial) {
+        char returnType = ReturnTypeForSelector(interstitial, @selector(hasImageInterstitial));
+        present = present || !ReturnTypeIsBool(returnType) ||
+                  BoolForSelectorIfResponds(interstitial, @selector(hasImageInterstitial));
+    }
+    if (!present) {
+        return 0;
+    }
+
+    BHTSensitiveFlags flags = BHTSensitiveFlagged;
+    id title = ObjectForSelectorIfResponds(interstitial, @selector(title));
+    NSString* text = [title isKindOfClass:NSString.class] ? title : ObjectForSelectorIfResponds(title, @selector(text));
+    if ([text isKindOfClass:NSString.class]) {
+        NSString* lower = text.lowercaseString;
+        if ([lower containsString:@"成人"] || [lower containsString:@"adult"] || [lower containsString:@"nudity"]) {
+            flags |= BHTSensitiveAdultContent;
+        }
+        if ([lower containsString:@"暴力"] || [lower containsString:@"violen"] || [lower containsString:@"gore"]) {
+            flags |= BHTSensitiveGraphicViolence;
+        }
+    }
+    return flags;
+}
+
 // Flags of the post a cell shows: for a retweet only the retweeted original
-// and what it links to, otherwise everything the view model links to.
+// and what it links to (its own marks: X may lay the retweeter's warning over
+// it, which says nothing about the post), otherwise everything the view model
+// links to, X's warning over the media included. Read as X says it, with
+// warnings hidden or not.
 static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
+    BOOL wasReading = BHTReadingRawSensitivity;
+    BHTReadingRawSensitivity = YES;
     NSArray* objects = ObjectsLinkedFrom(viewModel);
     id original = RetweetedOriginal(objects);
     if (original) {
@@ -232,7 +268,11 @@ static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
     BHTSensitiveFlags flags = 0;
     for (id object in objects) {
         flags |= FlagsForObject(object);
+        if (!original) {
+            flags |= FlagsForInterstitial(object);
+        }
     }
+    BHTReadingRawSensitivity = wasReading;
     return flags;
 }
 

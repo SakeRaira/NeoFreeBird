@@ -139,7 +139,12 @@ static BOOL IsRetweetOfUnmarkedPost(id model) {
     return clean;
 }
 
+__thread BOOL BHTReadingRawSensitivity;
+
 BOOL BHTHidesSensitiveWarningFor(id model) {
+    if (BHTReadingRawSensitivity) {
+        return NO;
+    }
     return BHTSensitiveWarningsSuppressed() || IsRetweetOfUnmarkedPost(model);
 }
 
