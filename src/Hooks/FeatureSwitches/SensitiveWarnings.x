@@ -30,6 +30,7 @@
 
 BOOL BHTViewModelShowsRetweetOfUnflaggedPost(id viewModel);
 BOOL BHTPostHasOwnInterstitial(id post);
+NSString* BHTOwnInterstitialDebugDescription(id post);
 
 static BOOL JudgeRetweetsByOriginal(void) {
     return [BHTSettings boolForKey:@"sensitive_by_original_post"];
@@ -179,6 +180,85 @@ static id OverlayStatusViewModel(UIView* overlay) {
 
 BOOL BHTOverlayShowsRetweetOfUnmarkedPost(UIView* overlay) {
     return JudgeRetweetsByOriginal() && IsRetweetOfUnmarkedPost(OverlayStatusViewModel(overlay));
+}
+
+// MARK: - Debug readout over blurred media
+
+static const void* SensitiveOverlayDebugLabelKey = &SensitiveOverlayDebugLabelKey;
+
+// vm: the post's view model. rt: found by the highlight's walk (hl) and the
+// original found by this file's (orig). Then the original's marks (flag,
+// author's flag, media label, author's account type), its warning
+// (BHTOwnInterstitialDebugDescription), and the outcome: judgement on,
+// warning hidden, blur showing, X asking for age verification to show it.
+static NSString* SensitiveOverlayDebugText(HFSensitiveTweetBlurredInterstitialView* overlay) {
+    id viewModel = OverlayStatusViewModel(overlay);
+    NSMutableArray<NSString*>* lines = [NSMutableArray array];
+    [lines addObject:[NSString stringWithFormat:@"vm=%@", viewModel ? NSStringFromClass([viewModel class]) : @"nil"]];
+
+    BOOL wasOwn = ReadingOwnMarks;
+    BOOL wasRaw = BHTReadingRawSensitivity;
+    ReadingOwnMarks = YES;
+    BHTReadingRawSensitivity = YES;
+    BOOL cleanByHighlight = viewModel && BHTViewModelShowsRetweetOfUnflaggedPost(viewModel);
+    id original = viewModel ? OriginalShownThroughRetweet(viewModel) : nil;
+    [lines addObject:[NSString stringWithFormat:@"rt hl=%d orig=%@", cleanByHighlight,
+                                                original ? NSStringFromClass([original class]) : @"nil"]];
+    if (original) {
+        id author = BHTSafeObject(original, @selector(fromUser));
+        [lines addObject:[NSString stringWithFormat:@"ps=%d fa=%d mw=%d type=%lld mark=%d",
+                                                    BHTSafeBool(original, @selector(isPossiblySensitive)),
+                                                    BHTSafeBool(original, @selector(hasSensitiveMediaWarningsFlaggedByAuthor)),
+                                                    MediaHasWarning(original),
+                                                    BHTSafeLongLong(author, @selector(profileInterstitialType)),
+                                                    PostHasSensitiveMark(original)]];
+        [lines addObject:BHTOwnInterstitialDebugDescription(original)];
+    }
+    BHTReadingRawSensitivity = wasRaw;
+    ReadingOwnMarks = wasOwn;
+
+    BOOL age = NO;
+    id delegate = [overlay respondsToSelector:@selector(delegate)] ? overlay.delegate : nil;
+    SEL ageSelector = @selector(blurViewRequiresAgeVerificationToRevealWithBlurView:);
+    if ([delegate respondsToSelector:ageSelector]) {
+        age = ((BOOL (*)(id, SEL, id))objc_msgSend)(delegate, ageSelector, overlay);
+    }
+    BOOL blurred = [overlay respondsToSelector:@selector(blurViewIsHidden)] && !overlay.blurViewIsHidden;
+    [lines addObject:[NSString stringWithFormat:@"judge=%d hide=%d blur=%d age=%d", JudgeRetweetsByOriginal(),
+                                                BHTOverlayShowsRetweetOfUnmarkedPost(overlay), blurred, age]];
+    return [lines componentsJoinedByString:@"\n"];
+}
+
+void BHTUpdateSensitiveOverlayDebug(HFSensitiveTweetBlurredInterstitialView* overlay) {
+    UILabel* label = objc_getAssociatedObject(overlay, SensitiveOverlayDebugLabelKey);
+    if (![BHTSettings boolForKey:@"highlight_sensitive_tweets_debug"]) {
+        [label removeFromSuperview];
+        return;
+    }
+    if (!label) {
+        label = [[UILabel alloc] init];
+        label.numberOfLines = 0;
+        label.font = [UIFont monospacedSystemFontOfSize:9 weight:UIFontWeightRegular];
+        label.textColor = UIColor.whiteColor;
+        label.backgroundColor = [UIColor colorWithWhite:0 alpha:0.7];
+        label.userInteractionEnabled = NO;
+        objc_setAssociatedObject(overlay, SensitiveOverlayDebugLabelKey, label, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (label.superview != overlay) {
+        [overlay addSubview:label];
+    } else if (overlay.subviews.lastObject != label) {
+        [overlay bringSubviewToFront:label];
+    }
+    NSString* text = SensitiveOverlayDebugText(overlay);
+    if (![label.text isEqualToString:text]) {
+        label.text = text;
+    }
+    CGFloat width = MAX(0, CGRectGetWidth(overlay.bounds) - 8);
+    CGSize size = [label sizeThatFits:CGSizeMake(width, CGFLOAT_MAX)];
+    CGRect frame = CGRectMake(4, 4, width, MIN(size.height, MAX(0, CGRectGetHeight(overlay.bounds) - 8)));
+    if (!CGRectEqualToRect(label.frame, frame)) {
+        label.frame = frame;
+    }
 }
 
 %hook T1TwitterCoreStatusViewModelAdapter

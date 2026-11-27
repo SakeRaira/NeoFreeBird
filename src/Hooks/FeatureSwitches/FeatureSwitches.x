@@ -397,6 +397,7 @@ static __thread NSUInteger NFBLiquidGlassInstallationDepth;
 - (void)layoutSubviews {
     %orig;
     BHTUpdateSensitiveMediaRevealButton(self);
+    BHTUpdateSensitiveOverlayDebug(self);
 }
 
 - (void)setBlurViewIsHidden:(BOOL)hidden {

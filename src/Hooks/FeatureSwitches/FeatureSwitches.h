@@ -20,3 +20,7 @@ BOOL BHTHidesSensitiveWarningFor(id model);
 // A media overlay showing a post through a retweet whose original has no
 // sensitive mark ("Judge retweets by the original post").
 BOOL BHTOverlayShowsRetweetOfUnmarkedPost(UIView* overlay);
+
+// With the sensitive highlight's debug display on, what the retweet
+// judgement saw, written over a blurred media overlay.
+void BHTUpdateSensitiveOverlayDebug(HFSensitiveTweetBlurredInterstitialView* overlay);

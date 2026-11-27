@@ -266,12 +266,35 @@ static BOOL IsPostModel(id object) {
     return statusClass && [object isKindOfClass:statusClass];
 }
 
-// That warning when it's the post's own. Building a retweet
-// (-[TFNTwitterStatus initWithStatusBundle:]), X gives the original the
-// retweet's warning, the very same object (put there for the retweeter's
-// account on everything it posts), and replaces it only with a warning the
-// original came with. An original holding its retweet's warning has none of
-// its own. Read from the ivars, past the warning hooks.
+// That warning when it's the post's own. X gives a retweet's original the
+// retweet's warning (put there for the retweeter's account on everything it
+// posts): building the retweet (-[TFNTwitterStatus initWithStatusBundle:]),
+// replaced only with a warning the original came with, and again when a
+// timeline hands the posts their warnings, as a fresh object each time. So
+// whether the original came with a warning of its own is recorded as X
+// builds the retweet, from the original's own data (its bundle). Without a
+// record: not its own when it's its retweet's (the same object, or an equal
+// one over a retweet carrying the retweeter's mark). Read from the ivars,
+// past the warning hooks.
+static const void* OwnInterstitialRecordKey = &OwnInterstitialRecordKey;
+
+// The retweet carries its author's mark: its own flag, or the retweeter's
+// sensitive account.
+static BOOL RetweetCarriesRetweeterMark(id retweet) {
+    BOOL wasReading = BHTReadingRawSensitivity;
+    BHTReadingRawSensitivity = YES;
+    id canonical = objectIvar(retweet, "_canonicalStatus");
+    BOOL marked = BoolForSelectorIfResponds(canonical, @selector(isPossiblySensitive));
+    id author = ObjectForSelectorIfResponds(retweet, @selector(fromUser));
+    SEL typeSelector = @selector(profileInterstitialType);
+    char returnType = ReturnTypeForSelector(author, typeSelector);
+    if (!marked && (returnType == 'q' || returnType == 'l' || returnType == 'i')) {
+        marked = BHTIsSensitiveMediaInterstitialType(((long long (*)(id, SEL))objc_msgSend)(author, typeSelector));
+    }
+    BHTReadingRawSensitivity = wasReading;
+    return marked;
+}
+
 static id OwnInterstitial(id post) {
     if (!IsPostModel(post)) {
         return nil;
@@ -281,10 +304,45 @@ static id OwnInterstitial(id post) {
         return nil;
     }
     id retweet = ObjectForSelectorIfResponds(post, @selector(retweetingStatus));
-    if (retweet && retweet != post && objectIvar(retweet, "_imageInterstitial") == interstitial) {
+    if (!retweet || retweet == post) {
+        return interstitial;
+    }
+    NSNumber* record = objc_getAssociatedObject(post, OwnInterstitialRecordKey);
+    if (record) {
+        return record.boolValue ? interstitial : nil;
+    }
+    id outer = objectIvar(retweet, "_imageInterstitial");
+    if (outer == interstitial || (outer && [outer isEqual:interstitial] && RetweetCarriesRetweeterMark(retweet))) {
         return nil;
     }
     return interstitial;
+}
+
+// Debug readout (SensitiveWarnings.x): what the original's warning is made of.
+static NSString* ShortRichText(id richText) {
+    id text = [richText isKindOfClass:NSString.class] ? richText : ObjectForSelectorIfResponds(richText, @selector(text));
+    if (![text isKindOfClass:NSString.class] || [text length] == 0) {
+        return @"-";
+    }
+    NSString* oneLine = [[text componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]
+        componentsJoinedByString:@" "];
+    return oneLine.length > 28 ? [[oneLine substringToIndex:28] stringByAppendingString:@"…"] : oneLine;
+}
+
+NSString* BHTOwnInterstitialDebugDescription(id post) {
+    id interstitial = objectIvar(post, "_imageInterstitial");
+    id retweet = ObjectForSelectorIfResponds(post, @selector(retweetingStatus));
+    id outer = retweet && retweet != post ? objectIvar(retweet, "_imageInterstitial") : nil;
+    NSNumber* record = objc_getAssociatedObject(post, OwnInterstitialRecordKey);
+    return [NSString stringWithFormat:@"int=%d rtint=%d rec=%@ same=%d eq=%d rtmark=%d own=%d\nt=%@\nrt=%@",
+                                      InterstitialIsPresent(interstitial), InterstitialIsPresent(outer),
+                                      record ? (record.boolValue ? @"Y" : @"N") : @"-",
+                                      interstitial && outer == interstitial,
+                                      interstitial && outer && [outer isEqual:interstitial],
+                                      retweet && retweet != post && RetweetCarriesRetweeterMark(retweet),
+                                      OwnInterstitial(post) != nil,
+                                      ShortRichText(ObjectForSelectorIfResponds(interstitial, @selector(title))),
+                                      ShortRichText(ObjectForSelectorIfResponds(outer, @selector(title)))];
 }
 
 BOOL BHTPostHasOwnInterstitial(id post) {
@@ -579,6 +637,23 @@ void applySensitiveHighlightSetting(void) {
         UpdateSensitiveHighlight(cell);
     }
 }
+
+// Whether a retweet's original came with a warning over its media of its
+// own (its bundle's), for OwnInterstitial.
+%hook TFNTwitterStatus
+
+- (id)initWithStatusBundle:(id)bundle {
+    self = %orig;
+    id original = self ? objectIvar(self, "_retweetedStatus") : nil;
+    id originalBundle = ObjectForSelectorIfResponds(bundle, @selector(retweetedTweet));
+    if (original && original != self && originalBundle) {
+        BOOL own = InterstitialIsPresent(ObjectForSelectorIfResponds(originalBundle, @selector(imageInterstitial)));
+        objc_setAssociatedObject(original, OwnInterstitialRecordKey, @(own), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return self;
+}
+
+%end
 
 %hook T1StatusCell
 
