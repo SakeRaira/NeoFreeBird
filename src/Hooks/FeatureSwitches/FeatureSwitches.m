@@ -99,13 +99,18 @@ UIButton* BHTSensitiveMediaRevealButton(HFSensitiveTweetBlurredInterstitialView*
     return button;
 }
 
+// Warnings off, or this overlay's post judged by its original and found clean.
+static BOOL OverlayWarningHidden(HFSensitiveTweetBlurredInterstitialView* overlay) {
+    return BHTSensitiveWarningsSuppressed() || BHTOverlayShowsRetweetOfUnmarkedPost(overlay);
+}
+
 void BHTUpdateSensitiveMediaRevealButton(HFSensitiveTweetBlurredInterstitialView* overlay) {
     UIButton* button = BHTSensitiveMediaRevealButton(overlay);
     if (!button) {
         return;
     }
 
-    BOOL shouldHide = BHTSensitiveWarningsSuppressed() &&
+    BOOL shouldHide = OverlayWarningHidden(overlay) &&
                       [overlay respondsToSelector:@selector(blurViewIsHidden)] &&
                       overlay.blurViewIsHidden;
     if (shouldHide && !button.hidden) {
@@ -119,7 +124,7 @@ void BHTUpdateSensitiveMediaRevealButton(HFSensitiveTweetBlurredInterstitialView
 
 static void BHTRevealSensitiveMedia(HFSensitiveTweetBlurredInterstitialView* overlay) {
     if (!overlay.window || overlay.hidden ||
-        !BHTSensitiveWarningsSuppressed() ||
+        !OverlayWarningHidden(overlay) ||
         ![overlay respondsToSelector:@selector(blurViewIsHidden)] || overlay.blurViewIsHidden ||
         ![overlay respondsToSelector:@selector(delegate)] ||
         ![overlay respondsToSelector:@selector(showOrHideMediaButtonPressed:)]) {
@@ -142,7 +147,7 @@ static void BHTRevealSensitiveMedia(HFSensitiveTweetBlurredInterstitialView* ove
 }
 
 void BHTScheduleSensitiveMediaReveal(HFSensitiveTweetBlurredInterstitialView* overlay) {
-    if (!overlay.window || !BHTSensitiveWarningsSuppressed() ||
+    if (!overlay.window || !OverlayWarningHidden(overlay) ||
         objc_getAssociatedObject(overlay, &SensitiveMediaRevealPendingKey)) {
         return;
     }

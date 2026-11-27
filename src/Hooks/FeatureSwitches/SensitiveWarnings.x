@@ -19,83 +19,141 @@
 
 // X gives a retweet the warning of the account that retweeted it (an account
 // X considers sensitive has the mark on everything it posts, retweets
-// included), even over a post that carries no mark of its own. With "Judge
-// retweets by the original post" on, a retweet whose original has no
-// sensitive mark (its own flag, its author's, or its author's account) gets
-// no warning either. A warning is never added.
+// included), even over a post that carries no mark of its own. The mark can
+// sit on the retweet or reach the original it shows, and the media's overlay
+// is decided from either. With "Judge retweets by the original post" on, a
+// post shown through a retweet whose original has no sensitive mark (its own
+// flag, its media's, or its author's flag or account) gets no warning: the
+// checks below answer no, and an overlay drawn anyway is opened the way the
+// Show button would (FeatureSwitches.m). A warning is never added.
 
 static BOOL JudgeRetweetsByOriginal(void) {
     return [BHTSettings boolForKey:@"sensitive_by_original_post"];
 }
 
-// The post a model shows: the TFNTwitterStatus itself, or the one a view
-// model wraps, up to three deep.
-static id StatusBehind(id model) {
-    Class statusClass = objc_getClass("TFNTwitterStatus");
-    for (NSUInteger depth = 0; model && statusClass && depth < 4; depth++) {
-        if ([model isKindOfClass:statusClass]) {
-            return model;
+// Set while an original's own marks are read: its checks go through the
+// hooks below too, and then answer as X would.
+static __thread BOOL ReadingOwnMarks;
+
+static Class StatusClass(void) {
+    static Class statusClass;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        statusClass = objc_getClass("TFNTwitterStatus");
+    });
+    return statusClass;
+}
+
+static id InnerModel(id model) {
+    for (NSString* name in @[@"statusViewModel", @"tweet", @"status"]) {
+        id inner = BHTSafeObject(model, NSSelectorFromString(name));
+        if (inner && inner != model) {
+            return inner;
         }
-        id inner = nil;
-        for (NSString* name in @[@"tweet", @"status", @"statusViewModel"]) {
-            inner = BHTSafeObject(model, NSSelectorFromString(name));
-            if (inner && inner != model) {
-                break;
-            }
-            inner = nil;
-        }
-        model = inner;
     }
     return nil;
 }
 
-static BOOL PostHasSensitiveMark(id post) {
-    if (BHTSafeBool(post, @selector(isPossiblySensitive)) ||
-        BHTSafeBool(post, @selector(hasSensitiveMediaWarningsFlaggedByAuthor))) {
-        return YES;
+// The post a model shows: the TFNTwitterStatus itself, or the one a view
+// model wraps, up to three deep.
+static id StatusBehind(id model) {
+    Class statusClass = StatusClass();
+    for (NSUInteger depth = 0; model && statusClass && depth < 4; depth++) {
+        if ([model isKindOfClass:statusClass]) {
+            return model;
+        }
+        model = InnerModel(model);
     }
-    // The author's account (a profile interstitial of any kind).
-    id author = BHTSafeObject(post, @selector(fromUser));
-    return BHTSafeLongLong(author, @selector(profileInterstitialType)) != 0;
+    return nil;
 }
 
-// For a retweet, the post it shares (as a TFNTwitterStatus), else nil. The
-// model answers whether it's a retweet itself where it can: a view model
-// says so, and points to the original through representedStatus.
-static id RetweetedOriginalOf(id model) {
-    for (NSUInteger depth = 0; model && depth < 4; depth++) {
-        if ([model respondsToSelector:@selector(isRetweet)]) {
-            if (!BHTSafeBool(model, @selector(isRetweet))) {
-                return nil;
-            }
-            id original = BHTSafeObject(model, @selector(retweetedStatus))
-                              ?: BHTSafeObject(model, @selector(representedStatus));
-            return original && original != model ? StatusBehind(original) : nil;
+// A moderation label on any of the post's media (adult content, violence...).
+// The label object can exist with every category off.
+static BOOL MediaHasWarning(id post) {
+    NSArray* media = BHTSafeObject(BHTSafeObject(post, @selector(entities)), @selector(media));
+    if (![media isKindOfClass:NSArray.class]) {
+        return NO;
+    }
+    for (id item in media) {
+        id warning = BHTSafeObject(item, @selector(sensitiveMediaWarning));
+        if (!warning) {
+            continue;
         }
-        id inner = nil;
-        for (NSString* name in @[@"statusViewModel", @"tweet", @"status"]) {
-            inner = BHTSafeObject(model, NSSelectorFromString(name));
-            if (inner && inner != model) {
-                break;
-            }
-            inner = nil;
+        if (![warning respondsToSelector:@selector(hasAnyWarning)] || BHTSafeBool(warning, @selector(hasAnyWarning))) {
+            return YES;
         }
-        model = inner;
+    }
+    return NO;
+}
+
+static BOOL PostHasSensitiveMark(id post) {
+    ReadingOwnMarks = YES;
+    id author = BHTSafeObject(post, @selector(fromUser));
+    BOOL marked = BHTSafeBool(post, @selector(isPossiblySensitive)) ||
+                  BHTSafeBool(post, @selector(hasSensitiveMediaWarningsFlaggedByAuthor)) || MediaHasWarning(post) ||
+                  BHTSafeLongLong(author, @selector(profileInterstitialType)) != 0;
+    ReadingOwnMarks = NO;
+    return marked;
+}
+
+// The original post a model shows through a retweet (a TFNTwitterStatus),
+// else nil: a retweet's original, or a post a retweet carries (X links such
+// a post back to the retweet).
+static id OriginalShownThroughRetweet(id model) {
+    Class statusClass = StatusClass();
+    for (NSUInteger depth = 0; model && statusClass && depth < 4; depth++) {
+        if ([model isKindOfClass:statusClass]) {
+            if (BHTSafeBool(model, @selector(isRetweet))) {
+                id original = BHTSafeObject(model, @selector(retweetedStatus));
+                return [original isKindOfClass:statusClass] && original != model ? original : nil;
+            }
+            return BHTSafeObject(model, @selector(retweetingStatus)) ? model : nil;
+        }
+        // A view model saying it's a retweet points to the original.
+        if (BHTSafeBool(model, @selector(isRetweet))) {
+            id original = StatusBehind(BHTSafeObject(model, @selector(representedStatus)));
+            if (original) {
+                return original;
+            }
+        }
+        model = InnerModel(model);
     }
     return nil;
 }
 
 // Only judged with the original post in hand: anything else keeps X's answer.
 static BOOL IsRetweetOfUnmarkedPost(id model) {
-    if (!JudgeRetweetsByOriginal()) {
+    if (ReadingOwnMarks || !JudgeRetweetsByOriginal()) {
         return NO;
     }
-    id original = RetweetedOriginalOf(model);
+    id original = OriginalShownThroughRetweet(model);
     return original && !PostHasSensitiveMark(original);
 }
 
 BOOL BHTHidesSensitiveWarningFor(id model) {
     return BHTSensitiveWarningsSuppressed() || IsRetweetOfUnmarkedPost(model);
+}
+
+// A media overlay's post: the model of the nearest view around it that shows
+// a post (a cell's status view).
+BOOL BHTOverlayShowsRetweetOfUnmarkedPost(UIView* overlay) {
+    if (!JudgeRetweetsByOriginal()) {
+        return NO;
+    }
+    UIView* view = overlay.superview;
+    for (NSUInteger depth = 0; view && depth < 16; depth++, view = view.superview) {
+        id viewModel = BHTSafeObject(view, @selector(viewModel));
+        if (!viewModel) {
+            continue;
+        }
+        if (OriginalShownThroughRetweet(viewModel)) {
+            return IsRetweetOfUnmarkedPost(viewModel);
+        }
+        if (StatusBehind(viewModel)) {
+            return NO;
+        }
+    }
+    return NO;
 }
 
 %hook T1TwitterCoreStatusViewModelAdapter

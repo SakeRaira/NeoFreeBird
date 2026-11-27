@@ -17,3 +17,6 @@ void BHTScheduleSensitiveMediaReveal(HFSensitiveTweetBlurredInterstitialView* ov
 // Warnings off altogether, or `model` a retweet judged by its original
 // post ("Judge retweets by the original post").
 BOOL BHTHidesSensitiveWarningFor(id model);
+// A media overlay showing a post through a retweet whose original has no
+// sensitive mark ("Judge retweets by the original post").
+BOOL BHTOverlayShowsRetweetOfUnmarkedPost(UIView* overlay);
