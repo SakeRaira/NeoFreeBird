@@ -7,11 +7,12 @@ TWEAK_NAME = BHTwitter
 NFB_NAME := $(shell sed -n 's/^Name: //p' control)
 NFB_VERSION := $(shell sed -n 's/^Version: //p' control)
 NFB_COMMIT := $(shell git rev-parse --short HEAD)
+NFB_BUILD_DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 BHTwitter_FILES = $(shell find src \( -name '*.x' -o -name '*.m' \) | sort)
 BHTwitter_FRAMEWORKS = UIKit Foundation CoreLocation AVFoundation AVKit CoreMotion GameController VideoToolbox Accelerate CoreMedia CoreVideo CoreImage CoreGraphics ImageIO Photos CoreServices SystemConfiguration SafariServices Security QuartzCore WebKit SceneKit UniformTypeIdentifiers
 BHTwitter_OBJ_FILES = $(shell find deps/ffmpeg-kit-next/build/lib -name '*.a')
-BHTwitter_CFLAGS = -Isrc -Ideps/ffmpeg-kit-next/build -fobjc-arc -Wno-deprecated-declarations -Wno-nullability-completeness -Wno-unused-function -Wno-unused-property-ivar -Wno-error -DNFB_VERSION_STRING='"$(NFB_NAME) v$(NFB_VERSION)"' -DNFB_COMMIT_STRING='"$(NFB_COMMIT)"'
+BHTwitter_CFLAGS = -Isrc -Ideps/ffmpeg-kit-next/build -fobjc-arc -Wno-deprecated-declarations -Wno-nullability-completeness -Wno-unused-function -Wno-unused-property-ivar -Wno-error -DNFB_VERSION_STRING='"$(NFB_NAME) v$(NFB_VERSION)"' -DNFB_COMMIT_STRING='"$(NFB_COMMIT)"' -DNFB_BUILD_DATE_STRING='"$(NFB_BUILD_DATE)"'
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 

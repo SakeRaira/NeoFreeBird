@@ -645,7 +645,11 @@ static NSDictionary<NSString*, NSDictionary*>* BHTSettingsPages(void) {
                       @"type": @"toggle"},
                     @{@"key": @"highlight_sensitive_tweets_debug",
                       @"default": @NO,
-                      @"type": @"toggle"}
+                      @"type": @"toggle"},
+                    // When this build was made, and from which commit
+                    // (DebugSettingsViewController).
+                    @{@"titleKey": @"BUILD_INFO_TITLE",
+                      @"type": @"buildInfo"}
                 ]
             }
         };

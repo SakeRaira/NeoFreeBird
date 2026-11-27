@@ -402,7 +402,8 @@
 "SENSITIVE_BY_ORIGINAL_POST_TITLE" = "リツイートは元の投稿で判定";
 "SENSITIVE_BY_ORIGINAL_POST_DETAIL" = "リツイートにセンシティブ警告を付けるかどうかを、リツイートしたアカウントではなく、元の投稿（投稿自体、投稿者、投稿者のアカウント）にセンシティブ判定が付いているかで決めます。";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_TITLE" = "センシティブハイライトのデバッグ表示";
-"HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "各ツイートの左端に判定結果の色を表示します。赤: センシティブ、緑: 通常、黄: ツイートの情報を取得できない。";
+"HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "各ツイートの左端に判定結果の色を表示します。赤: センシティブ、緑: 通常、黄: ツイートの情報を取得できない。ぼかされたメディアの上には、リツイートの判定に使った情報も表示します。";
+"BUILD_INFO_TITLE" = "ビルド日時";
 "SENSITIVE_ZONES_TITLE" = "警告を表示する場所";
 "SENSITIVE_ZONES_SUMMARY_FORMAT" = "%1$ld か所・%2$ld m";
 "SENSITIVE_ZONES_ENABLED_TITLE" = "登録した場所の近くでは警告を表示";

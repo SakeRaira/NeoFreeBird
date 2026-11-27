@@ -402,7 +402,8 @@
 "SENSITIVE_BY_ORIGINAL_POST_TITLE" = "Judge retweets by the original post";
 "SENSITIVE_BY_ORIGINAL_POST_DETAIL" = "A retweet only gets a sensitive content warning when the post it shares is marked sensitive (by itself, its author or the author's account), not because the account that retweeted it is.";
 "HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_TITLE" = "Debug sensitive Tweet highlight";
-"HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "Shows a strip on the left edge of each Tweet: red for sensitive, green for not sensitive, yellow when the Tweet couldn't be inspected.";
+"HIGHLIGHT_SENSITIVE_TWEETS_DEBUG_DETAIL" = "Shows a strip on the left edge of each Tweet: red for sensitive, green for not sensitive, yellow when the Tweet couldn't be inspected. Blurred media also shows what the retweet judgement saw.";
+"BUILD_INFO_TITLE" = "Build date";
 "SENSITIVE_ZONES_TITLE" = "Show warnings at places";
 "SENSITIVE_ZONES_SUMMARY_FORMAT" = "%1$ld places · %2$ld m";
 "SENSITIVE_ZONES_ENABLED_TITLE" = "Show warnings near these places";
