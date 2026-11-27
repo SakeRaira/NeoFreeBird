@@ -236,6 +236,43 @@ static BHTSensitiveFlags FlagsForViewModel(id viewModel) {
     return flags;
 }
 
+// The author of any of `objects` with a profile interstitial (an account X
+// marks as sensitive, among others).
+static BOOL AuthorIsMarked(NSArray* objects) {
+    SEL typeSelector = @selector(profileInterstitialType);
+    for (id object in objects) {
+        id author = ObjectForSelectorIfResponds(object, @selector(fromUser));
+        char returnType = ReturnTypeForSelector(author, typeSelector);
+        if (returnType == 'q' || returnType == 'l' || returnType == 'i') {
+            if (((long long (*)(id, SEL))objc_msgSend)(author, typeSelector) != 0) {
+                return YES;
+            }
+        }
+    }
+    return NO;
+}
+
+// For "Judge retweets by the original post" (SensitiveWarnings.x): the post
+// a view model shows is a retweet, found the way the highlight finds it, and
+// the retweeted original carries no mark of its own (its flags, its media's
+// labels, its author's account).
+BOOL BHTViewModelShowsRetweetOfUnflaggedPost(id viewModel) {
+    if (!viewModel) {
+        return NO;
+    }
+    id original = RetweetedOriginal(ObjectsLinkedFrom(viewModel));
+    if (!original) {
+        return NO;
+    }
+    NSArray* objects = ObjectsLinkedFrom(original);
+    for (id object in objects) {
+        if (FlagsForObject(object)) {
+            return NO;
+        }
+    }
+    return !AuthorIsMarked(objects);
+}
+
 // Several categories can apply at once; the most severe one picks the color.
 static BHTSensitiveVerdict VerdictForFlags(BHTSensitiveFlags flags) {
     if (!(flags & BHTSensitiveFlagged)) {
@@ -404,6 +441,32 @@ static void UpdateDebugMarker(T1StatusCell* cell, BOOL show, BHTSensitiveVerdict
     marker.hidden = NO;
 }
 
+static const void* RetweetDebugMarkerKey = &RetweetDebugMarkerKey;
+
+// Debug aid for "Judge retweets by the original post": a blue strip on the
+// trailing edge of a retweet whose original was found and judged clean.
+static void UpdateRetweetDebugMarker(T1StatusCell* cell, BOOL show, id viewModel) {
+    UIView* marker = objc_getAssociatedObject(cell, RetweetDebugMarkerKey);
+    if (!show || !BHTViewModelShowsRetweetOfUnflaggedPost(viewModel)) {
+        marker.hidden = YES;
+        return;
+    }
+    if (!marker) {
+        marker = [[UIView alloc] init];
+        marker.userInteractionEnabled = NO;
+        marker.backgroundColor = UIColor.systemBlueColor;
+        objc_setAssociatedObject(cell, RetweetDebugMarkerKey, marker, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    UIView* container = cell.contentView;
+    if (marker.superview != container) {
+        [container addSubview:marker];
+    } else if (container.subviews.lastObject != marker) {
+        [container bringSubviewToFront:marker];
+    }
+    marker.frame = CGRectMake(container.bounds.size.width - 6, 0, 6, container.bounds.size.height);
+    marker.hidden = NO;
+}
+
 static void UpdateSensitiveHighlight(T1StatusCell* cell) {
     if (!cell) {
         return;
@@ -419,6 +482,7 @@ static void UpdateSensitiveHighlight(T1StatusCell* cell) {
 
     UpdateHighlightLayer(cell, statusView, enabled ? HighlightColorForVerdict(verdict) : nil);
     UpdateDebugMarker(cell, debug, verdict);
+    UpdateRetweetDebugMarker(cell, debug, debug ? ObjectForSelectorIfResponds(statusView, @selector(viewModel)) : nil);
 }
 
 // Quoted tweets bring status views of their own inside the cell; only the
