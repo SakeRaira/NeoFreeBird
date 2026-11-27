@@ -3,16 +3,22 @@
 //  NeoFreeBird
 //
 //  Keeps topic snoozes (and topic/country filters) on the For You tab from
-//  switching themselves off after the server's reset period.
+//  switching themselves off.
 //
-//  The reset is driven by TwitterHome.HomeTimelineFilterAutoResetCoordinator,
+//  X resets them one of two ways, picked by the server per account: on the
+//  wall clock once co_timeline_reset_period_minutes has passed, or as the app
+//  goes to the background. Either way stays the way X picked it: the period
+//  is stretched past any session (FeatureSwitches.m, and the typed accessors
+//  below for reads that go through Objective-C), and the background reset is
+//  skipped. Forcing the mode itself (wall clock instead of background) only
+//  reached X's Objective-C side; its Swift side read the switch and kept the
+//  other mode, the two disagreed on whether the filter was still on, and X
+//  refused to refresh ("Can't load posts") on every Home tab until the app
+//  was relaunched.
+//
+//  The reset itself is driven by TwitterHome.HomeTimelineFilterAutoResetCoordinator,
 //  a pure Swift object that reads the period through a closure and resets the
-//  filter from an NSTimer, so it can't be hooked itself. The period comes from
-//  the co_timeline_reset_period_minutes feature switch, which FeatureSwitches.x
-//  stretches past any realistic session. The typed accessors below cover reads
-//  that go through Objective-C instead of the keyed switch funnels; the
-//  iOS-only "reset on app background" and "auto-resets in ..." switches have no
-//  known keys, so these accessors are the only seam for them.
+//  filter from an NSTimer, so it can't be hooked itself.
 //
 
 #import "HookHelpers.h"
@@ -27,14 +33,14 @@ static BOOL KeepTimelineFilters(void) {
     return KeepTimelineFilters() ? BHTTimelineFilterNeverResetMinutes : %orig;
 }
 
-// Background mode resets the filter when the app goes to the background
-// instead of on the wall clock; keep it on the wall clock, which never fires.
-- (BOOL)isFilteredTimelineResetOnAppBackgroundEnabled {
+// The filter sheet's "resets in ..." note would no longer be true.
+- (BOOL)isFilteredTimelineShowAutoResetTextEnabled {
     return KeepTimelineFilters() ? NO : %orig;
 }
 
-// The filter sheet's "resets in ..." note would no longer be true.
-- (BOOL)isFilteredTimelineShowAutoResetTextEnabled {
+// X refuses to refresh a filtered timeline it doesn't count as active any
+// more; a kept filter stays refreshable whatever X counts.
+- (BOOL)isFilteredTimelineRefreshRequiresActiveFilterEnabled {
     return KeepTimelineFilters() ? NO : %orig;
 }
 
@@ -48,6 +54,15 @@ static BOOL KeepTimelineFilters(void) {
 
 - (BOOL)isShowAutoResetTextEnabled {
     return KeepTimelineFilters() ? NO : %orig;
+}
+
+// Where the background mode clears the filter as the app leaves the screen;
+// coming back finds it as it was, as if the app had stayed open.
+- (void)handleDidEnterBackground {
+    if (KeepTimelineFilters()) {
+        return;
+    }
+    %orig;
 }
 
 %end

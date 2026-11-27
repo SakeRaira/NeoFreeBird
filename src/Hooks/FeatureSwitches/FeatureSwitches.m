@@ -215,6 +215,11 @@ NSNumber* BHTFeatureSwitchOverrideValue(NSString* key, BOOL reportGenuineTabGate
     if ([key isEqualToString:@"co_timeline_reset_period_minutes"]) {
         return [BHTSettings boolForKey:@"keep_timeline_filters"] ? @(BHTTimelineFilterNeverResetMinutes) : nil;
     }
+    // X refuses to refresh a filtered timeline it no longer counts as active;
+    // with filters kept on, it stays refreshable (see TimelineFilters.x).
+    if ([key isEqualToString:@"ios_home_timeline_filtered_timeline_refresh_requires_active_filter_enabled"]) {
+        return [BHTSettings boolForKey:@"keep_timeline_filters"] ? @NO : nil;
+    }
 
     for (BHTFeatureSwitchRule* rule in BHTFeatureSwitchRules()) {
         if (!RuleMatchesKey(rule, key)) {
